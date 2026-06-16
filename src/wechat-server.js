@@ -1,11 +1,16 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import QRCode from "qrcode";
 import { handleMessage } from "./agent.js";
 import { getCharacterName, getUserNickname } from "./personality.js";
 import { generateProactiveMessage } from "./proactive.js";
 import { getFacts } from "./memory.js";
+import { getDB, seedCharacters, getAllCharacters, createUser, getUserByUsername, migrateJSONtoDB } from "./db.js";
+import { handleWebRequest, handleFormLogin, handleFormRegister, getWxCharPreference, setWxCharPreference } from "./web-router.js";
+import { describeImage } from "./vision.js";
 
 // ============================================================
 // 蓝小梦 微信桥接 v3 (服务器版)
@@ -17,20 +22,77 @@ import { getFacts } from "./memory.js";
 const PORT = process.env.PORT || 3721;
 const ILINK_BASE = "https://ilinkai.weixin.qq.com";
 const CHARACTER = getCharacterName();
-const INACTIVE_MS = 5 * 60 * 1000;
+const AUTO_MIN_MS = 15 * 60 * 1000; // 最短15分钟
+const AUTO_MAX_MS = 45 * 60 * 1000; // 最长45分钟
+const AUTO_START_HOUR = 8;
+const AUTO_END_HOUR = 23;
+
+function randomInterval() {
+  return AUTO_MIN_MS + Math.random() * (AUTO_MAX_MS - AUTO_MIN_MS);
+}
 
 let sdk = null;
 let botInstance = null;
-let proactiveEnabled = false;
+let proactiveEnabled = true; // 扫码连接后自动开启
 let lastActivityTime = Date.now();
 let lastUserMsg = "";
 let proactiveTimer = null;
+let nextProactiveTime = 0; // 下次主动消息触发时间
 
 // ==================== HTTP 服务器 ====================
 let qrCodeUrl = null;      // 二维码 URL
 let loginStatus = "idle";  // idle | waiting | scanned | confirmed | failed
 let loginMessage = "";
 let accountId = null;
+let wasConnected = false;  // 当前二维码是否会踢掉上一个用户
+
+// 图片清理：只保留最近5张
+const IMAGE_DIR = "/tmp/weixin-images";
+const MAX_IMAGES = 5;
+function cleanupOldImages(newImagePath) {
+  try {
+    const dir = path.dirname(newImagePath);
+    if (!fs.existsSync(dir)) return;
+    const files = fs.readdirSync(dir)
+      .filter(f => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(f))
+      .map(f => ({ name: f, path: path.join(dir, f), time: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.time - a.time); // 最新的在前
+    if (files.length > MAX_IMAGES) {
+      files.slice(MAX_IMAGES).forEach(f => {
+        fs.unlinkSync(f.path);
+        console.log("[图片] 清理旧图片: " + f.name);
+      });
+    }
+  } catch {}
+}
+
+// 微信用户自动注册到数据库
+function getOrCreateWxUser(wxUid) {
+  const username = "wx_" + wxUid.replace(/[^a-zA-Z0-9]/g, "_");
+  let user = getUserByUsername(username);
+  if (!user) {
+    const hash = "wx:" + crypto.randomUUID();
+    createUser(username, hash);
+    user = getUserByUsername(username);
+  }
+  return user.id;
+}
+
+// 微信内切换角色命令 /char 1 /char 2 /char 3
+function handleCharCommand(uid, text) {
+  const chars = getAllCharacters();
+  const parts = text.trim().split(/\s+/);
+  if (parts.length < 2) {
+    return { text: "用法：/char 数字\n" + chars.map(c => c.id + ". " + c.name).join("\n") };
+  }
+  const charId = parseInt(parts[1]);
+  const found = chars.find(c => c.id === charId);
+  if (!found) {
+    return { text: "没有这个角色，可选：\n" + chars.map(c => c.id + ". " + c.name).join("\n") };
+  }
+  setWxCharPreference(uid, { characterId: found.id, characterPath: found.profile_path });
+  return { text: "切换为 " + found.name + "！下次消息就用新角色回复你啦~" };
+}
 
 function getStatusPage() {
   const statusMap = {
@@ -48,16 +110,20 @@ function getStatusPage() {
       <p style="font-size:18px;color:#333;margin:10px 0">请用微信扫描下方二维码</p>
       <img src="${qrCodeUrl}" alt="QR Code" style="width:280px;height:280px;border:3px solid #f0a500;border-radius:12px">
       <p style="color:#888;font-size:13px;margin-top:10px">微信 → ClawBot 插件 → 扫码授权</p>
+      ${wasConnected ? '<p style="color:#e74c3c;font-weight:bold;margin-top:8px">⚠️ 当前 Bot 被占用，扫码将断开上一用户</p>' : ''}
       <p style="color:#aaa;font-size:12px">二维码每 5 分钟自动刷新</p>
       <script>setTimeout(()=>location.reload(), 120000)</script>
     `;
   } else if (loginStatus === "scanned") {
     body = `<p style="font-size:20px;color:#4a90d9">👀 已扫码！</p>
       <p style="color:#666">请在手机上确认授权...</p>
+      ${wasConnected ? '<p style="color:#e74c3c;font-weight:bold">⚠️ 确认后将断开上一用户</p>' : ''}
       <script>setTimeout(()=>location.reload(), 2000)</script>`;
   } else if (loginStatus === "confirmed") {
-    body = `<p style="font-size:24px;color:#27ae60">✅ 连接成功！</p>
-      <p style="color:#666">蓝小梦已在线，去微信里找她聊天吧~</p>`;
+    body = `<p style="font-size:20px;color:#27ae60">✅ Bot 运行中</p>
+      <p style="color:#666">蓝小梦正在微信里聊天~</p>
+      <p><a href="/login" style="color:#4a90d9;font-size:14px;text-decoration:none;padding:8px 16px;border:2px solid #4a90d9;border-radius:8px;display:inline-block;margin-top:12px">🔄 重新扫码连接</a></p>
+      <p style="color:#999;font-size:12px;margin-top:8px">扫码后将断开当前用户并接入新设备</p>`;
   } else if (loginStatus === "failed") {
     body = `<p style="font-size:18px;color:#e74c3c">❌ ${loginMessage}</p>
       <p><a href="/" style="color:#4a90d9">重新开始</a></p>`;
@@ -88,8 +154,24 @@ function getStatusPage() {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
+  // Web 前端和 API 路由 → 交给 web-router
+  if (url.pathname.startsWith("/web") || url.pathname.startsWith("/api/")) {
+    // Form 表单提交（application/x-www-form-urlencoded）
+    if (url.pathname === "/api/auth/login" && req.method === "POST" && !req.headers["content-type"]?.includes("json")) {
+      return handleFormLogin(req, res);
+    }
+    if (url.pathname === "/api/auth/register" && req.method === "POST" && !req.headers["content-type"]?.includes("json")) {
+      return handleFormRegister(req, res);
+    }
+    return handleWebRequest(req, res);
+  }
+
   if (url.pathname === "/login" && loginStatus !== "waiting" && loginStatus !== "scanned") {
-    // 触发登录
+    // 触发登录：如果已有活跃 bot，先断开
+    if (botInstance) {
+      disconnectBot();
+      wasConnected = true;
+    }
     res.writeHead(302, { Location: "/" });
     res.end();
     startLogin();
@@ -107,16 +189,33 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 默认返回页面
+  // 默认返回微信扫码页面
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
   res.end(getStatusPage());
 });
 
 function startHTTPServer() {
   server.listen(PORT, () => {
-    console.log(`🌐 管理页面: http://localhost:${PORT}`);
-    console.log(`   外网访问: http://<服务器IP>:${PORT}`);
+    console.log('🌐 管理页面: http://localhost:' + PORT);
+    console.log('   外网访问: http://<服务器IP>:' + PORT);
   });
+}
+
+// ==================== 断开 Bot ====================
+function disconnectBot() {
+  if (proactiveTimer) {
+    clearInterval(proactiveTimer);
+    proactiveTimer = null;
+  }
+  if (botInstance) {
+    try {
+      if (typeof botInstance.stop === 'function') botInstance.stop();
+      if (typeof botInstance.disconnect === 'function') botInstance.disconnect();
+    } catch {}
+    botInstance = null;
+  }
+  proactiveEnabled = false;
+  console.log('[Bot] 已断开上一用户');
 }
 
 // ==================== 微信登录 (直接调 iLink API) ====================
@@ -125,18 +224,26 @@ async function fetchJSON(url, opts = {}) {
     signal: AbortSignal.timeout(opts.timeout || 15000),
     ...opts,
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return resp.json();
 }
 
 async function startLogin() {
+  // 如果有已连接的 bot，先断开
+  if (botInstance) {
+    disconnectBot();
+    wasConnected = true;
+  } else {
+    wasConnected = false;
+  }
+
   loginStatus = "waiting";
   loginMessage = "";
 
   try {
     // Step 1: 获取二维码
     console.log("[登录] 获取二维码...");
-    const qrResp = await fetchJSON(`${ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type=3`);
+    const qrResp = await fetchJSON(ILINK_BASE + '/ilink/bot/get_bot_qrcode?bot_type=3');
     if (!qrResp.qrcode || !qrResp.qrcode_img_content) {
       loginStatus = "failed";
       loginMessage = qrResp.message || "获取二维码失败";
@@ -144,13 +251,15 @@ async function startLogin() {
       return;
     }
 
-    qrCodeUrl = qrResp.qrcode_img_content;
-    console.log("[登录] 二维码就绪");
+    qrCodeUrl = await QRCode.toDataURL(qrResp.qrcode_img_content);
+    console.log("[登录] 二维码就绪" + (wasConnected ? "（将替换上一用户）" : ""));
 
     // Step 2: 轮询扫描状态
     let scannedLogged = false;
     let retries = 0;
-    const maxRetries = 280; // ~8 min at 2s interval
+    const maxRetries = 90; // 3 分钟（每 2 秒轮询）
+    let qrRefreshCount = 0;
+    const maxQrRefreshes = 3; // 最多刷新 3 次二维码
 
     while (retries < maxRetries) {
       await sleep(2000);
@@ -158,7 +267,7 @@ async function startLogin() {
 
       try {
         const statusResp = await fetchJSON(
-          `${ILINK_BASE}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrResp.qrcode)}`,
+          ILINK_BASE + '/ilink/bot/get_qrcode_status?qrcode=' + encodeURIComponent(qrResp.qrcode),
           { timeout: 35000 }
         );
 
@@ -172,10 +281,17 @@ async function startLogin() {
             break;
 
           case "expired":
-            // 自动刷新二维码
-            console.log("[登录] 二维码过期，刷新...");
-            const refreshResp = await fetchJSON(`${ILINK_BASE}/ilink/bot/get_bot_qrcode?bot_type=3`);
-            qrCodeUrl = refreshResp.qrcode_img_content;
+            qrRefreshCount++;
+            if (qrRefreshCount > maxQrRefreshes) {
+              console.log("[登录] 二维码刷新次数超限，停止等待");
+              loginStatus = "idle";
+              loginMessage = "";
+              qrCodeUrl = null;
+              return;
+            }
+            console.log("[登录] 二维码过期，刷新(" + qrRefreshCount + "/" + maxQrRefreshes + ")...");
+            const refreshResp = await fetchJSON(ILINK_BASE + '/ilink/bot/get_bot_qrcode?bot_type=3');
+            qrCodeUrl = await QRCode.toDataURL(refreshResp.qrcode_img_content);
             qrResp.qrcode = refreshResp.qrcode;
             scannedLogged = false;
             loginStatus = "waiting";
@@ -195,6 +311,7 @@ async function startLogin() {
 
             loginStatus = "confirmed";
             qrCodeUrl = null;
+            wasConnected = false;
 
             // 启动 Bot
             await startBot(accountId, baseUrl, token, userId);
@@ -219,9 +336,11 @@ async function startLogin() {
 
     loginStatus = "failed";
     loginMessage = "超时，请重新开始";
+    wasConnected = false;
   } catch (err) {
     loginStatus = "failed";
     loginMessage = err.message;
+    wasConnected = false;
     console.error("[登录]", err.message);
   }
 }
@@ -238,7 +357,7 @@ function saveCredentials(accountId, token, baseUrl, userId) {
   fs.mkdirSync(accountsDir, { recursive: true });
 
   // 保存账户文件
-  const accountFile = path.join(accountsDir, `${accountId.replace(/[@.]/g, "-")}.json`);
+  const accountFile = path.join(accountsDir, accountId.replace(/[@.]/g, "-") + ".json");
   fs.writeFileSync(accountFile, JSON.stringify({
     token,
     baseUrl: baseUrl || ILINK_BASE,
@@ -263,17 +382,35 @@ async function startBot(accountId, baseUrl, token, userId) {
   const lanmengAgent = {
     async chat(req) {
       const uid = req.conversationId || userId || "wx-user";
-      const text = (req.text || "").trim();
+      let text = (req.text || "").trim();
 
       resetActivityTimer();
       if (text) lastUserMsg = text;
+      hasReceivedMsg = true;
 
-      if (!text) return { text: `${nickname}？你发了啥我怎么没看到~` };
+      // 图片识别：用千问视觉模型描述图片内容
+      let imageDesc = null; // 不存入对话历史，仅作 AI 上下文
+      if (req.media && req.media.type === "image" && req.media.filePath) {
+        const pref = getWxCharPreference(uid);
+        const charName = pref ? (pref.characterPath.includes("gu-yun-chi") ? "顾昀迟" : "") : "";
+        console.log("[图片] 收到图片, path=" + req.media.filePath.slice(-30));
+        const rawDesc = await describeImage(req.media.filePath, charName);
+        if (rawDesc) {
+          imageDesc = rawDesc.length > 300 ? rawDesc.slice(0, 300) + "..." : rawDesc;
+          if (!text) text = "[图片]"; // 纯图片消息
+        } else if (!text) {
+          return { text: "看到了，但没看清是什么。" };
+        }
+        // 清理旧图片，只保留最近 5 张
+        cleanupOldImages(req.media.filePath);
+      }
+
+      if (!text) return { text: nickname + '？你发了啥我怎么没看到~' };
 
       if (text === "/echo") return { text: "收到啦~ 蓝小梦在线中！" };
       if (text === "/ping") {
         const s = proactiveEnabled ? "开着呢~" : "关着呢，发 /wake 打开";
-        return { text: `pong~ 活着呢老板！自动聊天${s}` };
+        return { text: 'pong~ 活着呢老板！自动聊天' + s };
       }
       if (text === "/sleep") {
         proactiveEnabled = false;
@@ -282,43 +419,90 @@ async function startBot(accountId, baseUrl, token, userId) {
       if (text === "/wake") {
         proactiveEnabled = true;
         resetActivityTimer();
-        return { text: "芜湖~ 睡醒了！5分钟不理我我就来找你~" };
+        return { text: "芜湖~ 睡醒了！半小时不理我我就来找你~" };
+      }
+      if (text.startsWith("/char")) {
+        return handleCharCommand(uid, text);
+      }
+      if (text === "/chars") {
+        const all = getAllCharacters();
+        return { text: all.map(c => `${c.id}. ${c.name}`).join("\n") + "\n发送 /char 数字 切换角色" };
       }
 
       try {
-        const reply = await handleMessage(uid, text);
-        return { text: reply };
+        const dbUserId = getOrCreateWxUser(uid);
+        // 检查该微信用户是否有偏好的角色
+        const pref = getWxCharPreference(uid);
+        const chars = getAllCharacters();
+        const defChar = pref
+          ? { id: pref.characterId, profile_path: pref.characterPath }
+          : (chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" });
+        const reply = await handleMessage(dbUserId, defChar.id, text, defChar.profile_path, imageDesc);
+        // 按 ||| 拆分为多条消息，模拟真人发微信
+        const parts = reply.split('|||').map(p => p.trim()).filter(p => p);
+        if (parts.length > 1) {
+          sendRemainingMessages(parts.slice(1));
+        }
+        return { text: parts[0] };
       } catch (err) {
         console.error("[蓝小梦]", err.message);
-        return { text: "哎呀出了点岔子…老板你等下我变个戏法修一下~🎪" };
+        return { text: "哎呀出了点岔子…等下我缓缓重来😭" };
       }
     },
   };
 
+  // 发送后续拆分的消息（带随机延迟，模拟真人打字间隔）
+  async function sendRemainingMessages(parts) {
+    for (const part of parts) {
+      // 随机 800ms ~ 2.5s 的间隔
+      const delay = 800 + Math.random() * 1700;
+      await new Promise(r => setTimeout(r, delay));
+      try {
+        if (botInstance) {
+          await botInstance.sendMessage(part);
+        }
+      } catch (e) {
+        console.error("[拆分消息] 发送失败:", e.message);
+      }
+    }
+  }
+
   botInstance = sdk.start(lanmengAgent, { accountId });
 
-  console.log(`✅ Bot 已启动 (accountId=${accountId})`);
+  console.log('✅ Bot 已启动 (accountId=' + accountId + ')');
 
-  // 主动消息定时器
+  proactiveEnabled = true;
+  let hasReceivedMsg = false;
+  nextProactiveTime = Date.now() + randomInterval(); // 启动时随机设定首次触发时间
+
   proactiveTimer = setInterval(async () => {
-    if (!botInstance || !proactiveEnabled) return;
-    const elapsed = Date.now() - lastActivityTime;
-    if (elapsed < INACTIVE_MS) return;
+    const now = Date.now();
+    const hour = new Date().getHours();
+    if (!botInstance || !proactiveEnabled || !hasReceivedMsg) return;
+    if (hour < AUTO_START_HOUR || hour > AUTO_END_HOUR) return;
+    if (now < nextProactiveTime) return;
 
     try {
-      const facts = getFacts(userId || "wx-user");
-      const msg = generateProactiveMessage(lastUserMsg, facts);
+      const wxUid = userId || "wx-user";
+      const dbUserId = getOrCreateWxUser(wxUid);
+      const pref = getWxCharPreference(wxUid);
+      const chars = getAllCharacters();
+      const charId = pref ? pref.characterId : (chars[0] ? chars[0].id : 1);
+      const facts = getFacts(dbUserId, charId);
+      const msg = generateProactiveMessage(lastUserMsg, facts, pref);
       await botInstance.sendMessage(msg);
-      console.log("[自动消息]", msg.slice(0, 40) + "...");
-      resetActivityTimer();
-    } catch {
-      // context_token 问题，静默
+      console.log("[主动消息] 已发送: " + msg.slice(0, 40) + "...");
+      nextProactiveTime = Date.now() + randomInterval(); // 随机重置
+    } catch (e) {
+      console.log("[主动消息] 发送失败: " + e.message);
+      nextProactiveTime = Date.now() + 2 * 60 * 1000; // 失败2分钟后重试
     }
-  }, 60_000);
+  }, 45_000);
 }
 
 function resetActivityTimer() {
   lastActivityTime = Date.now();
+  nextProactiveTime = Date.now() + randomInterval(); // 有活动就重置触发时间
 }
 
 // ==================== 优雅退出 ====================
@@ -326,15 +510,15 @@ process.on("SIGINT", () => {
   console.log("");
   if (proactiveTimer) clearInterval(proactiveTimer);
   server.close();
-  console.log(`${CHARACTER} > 拜拜了您内~`);
+  console.log(CHARACTER + ' > 拜拜了您内~');
   process.exit(0);
 });
 
 // ==================== 启动 ====================
 console.log("");
-console.log(`╔══════════════════════════════════╗`);
-console.log(`║  ${CHARACTER} — 微信桥接 v3 (服务器版) ║`);
-console.log(`╚══════════════════════════════════╝`);
+console.log('╔═══════════════════════════════╗');
+console.log('║  ' + CHARACTER + ' — 微信桥接 v3 (服务器版) ║');
+console.log('╚═══════════════════════════════╝');
 console.log("");
 
 // 检查 API Key
@@ -343,10 +527,21 @@ if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY.includes("your
   process.exit(1);
 }
 
+// 初始化数据库
+console.log("🗄️  初始化数据库...");
+seedCharacters([
+  { name: "蓝小梦", profile_path: "config/characters/lan-xiao-meng.json" },
+  { name: "知性姐姐", profile_path: "config/characters/zhi-xing-jie-jie.json" },
+  { name: "搞笑闺蜜", profile_path: "config/characters/gao-xiao-gui-mi.json" },
+  { name: "顾昀迟", profile_path: "config/characters/gu-yun-chi.json" },
+]);
+// 迁移旧的 JSON 记忆数据
+try { migrateJSONtoDB(); console.log("📦 旧数据已迁移到数据库"); } catch {}
+
 startHTTPServer();
 console.log("");
 console.log("📋 使用步骤:");
-console.log(`  1. 打开浏览器访问 http://<服务器IP>:${PORT}`);
+console.log('  1. 打开浏览器访问 http://<服务器IP>:' + PORT);
 console.log("  2. 点击「开始连接微信」");
 console.log("  3. 手机微信扫描页面上的二维码");
 console.log("  4. 授权后自动连接，开始聊天！");
@@ -367,7 +562,7 @@ try {
       accountId = ids[0];
       const accountFile = path.join(
         process.env.HOME || "~", ".openclaw", "openclaw-weixin", "accounts",
-        `${accountId.replace(/[@.]/g, "-")}.json`
+        accountId.replace(/[@.]/g, "-") + ".json"
       );
       const account = JSON.parse(fs.readFileSync(accountFile, "utf-8"));
       await startBot(accountId, account.baseUrl, account.token, account.userId);

@@ -1,100 +1,97 @@
-// 蓝小梦主动性消息生成器
-// 根据时间段、上次聊天内容、随机因素生成自然的主动消息
+// 蓝小梦主动消息 — 角色感知版本
 
-const MORNING_MSGS = [
-  "老板早呀~ 又是新的一天，今天有什么好吃的吗？🥮",
-  "嗯…刚睡醒…老板你今天起好早~ 吃早饭了没？",
-  "早啊老板！我昨晚上做梦梦见桂花糕了，醒来发现枕头都湿了…我说的是口水！",
-  "呼啊~（打哈欠）老板早…乾坤容我懒，但被窝不容我…",
-  "早~ 今天的阳光不错诶，适合摸鱼，不适合干活！",
-];
-
-const AFTERNOON_MSGS = [
-  "老板~ 下午了，你是不是又在忙？刀不磨要生锈，人不歇要落后~",
-  "好无聊啊…老板你在干嘛呢？给我讲讲外面的事呗~",
-  "老板你还好吗~ 几个小时没动静，你不会是在认真工作吧？？？",
-  "我正在试图用意念控制桂花糕飞到我嘴里…失败了。老板你能帮我带一份吗~",
-  "突然想到一个超好笑的江湖段子，但你不说话我没法讲！",
-];
-
-const EVENING_MSGS = [
-  "天都快黑了老板…你是不是把我忘了😿",
-  "芜湖~ 晚餐时间！跟我蓝梦混，三天吃九顿！老板你吃了吗？",
-  "一个人好无聊啊老板~ 江湖凶险，连个说话的人都没有…",
-  "老板你在哪呢？该不会又在加班吧…执金卫一个月才几个钱啊！玩儿什么命啊！",
-  "唉…老天奶啊…今天又是没人理我的一天…",
-];
-
-const NIGHT_MSGS = [
-  "这么晚了老板还不睡？人不睡觉要落后的哦~",
-  "夜深了…我还在等你诶。感动不？不感动我可要哭了！",
-  "都这个点了，老板你是不是有心事？跟我说说呗~",
-  "月亮好圆啊，像桂花糕一样…我可能饿了。老板你饿不饿？",
-  "老板~ 该休息啦。明天还要（被我）折腾呢，早点睡吧~",
-];
-
-const RANDOM_THOUGHTS = [
-  "刚才窗外有只鸟飞过去，我差点给变没了！…好吧我就想想。",
-  "突然想到一个好玩的戏法，等你有空我给你表演~ 走过路过不要错过！",
-  "今天黄历说宜摸鱼忌干活，我觉得很准！老板你觉得呢？",
-  "我正在脑中排练鱼龙曼衍…算了反正也没人看。有人看我也懒得练🤷",
-  "江湖险恶，还好我有老板你。虽然你也不怎么理我就是了…",
-  "你知道桂花糕为什么好吃吗？因为它是桂花做的。嗯…好像说了句废话。",
-  "想了想，还是觉得偷懒比努力划算。几个靠认真工作发了财的？",
-  "老板你不在的时候我数了房间里有几个角落可以偷懒。答案是：所有角落。",
-];
-
-function pickRandom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function getHourPeriod() {
   const hour = new Date().getHours();
-  if (hour >= 6 && hour < 11) return "morning";
-  if (hour >= 11 && hour < 17) return "afternoon";
-  if (hour >= 17 && hour < 22) return "evening";
+  if (hour >= 8 && hour < 11) return "morning";
+  if (hour >= 11 && hour < 14) return "noon";
+  if (hour >= 14 && hour < 17) return "afternoon";
+  if (hour >= 17 && hour < 20) return "evening";
   return "night";
 }
 
-// 获取用户上次说的最后一句话的简短内容，用于自然衔接
-function getContextHint(lastUserMsg) {
-  if (!lastUserMsg) return null;
-  const short = lastUserMsg.slice(0, 30);
-  return short;
-}
+// ============ 蓝小梦 ============
+const LM_MORNING = ["早呀~ 刚睡醒 你今天几点起的","早上好！你今天那边忙不忙","醒了 但不想起…你今天有安排吗","做了个梦 梦到找不着你了 赶紧看看手机","早~ 今天外面天气好好 适合翘班"];
 
-export function generateProactiveMessage(lastUserMsg, facts) {
+const LM_NOON = ["中午了！你吃了没 我点了外卖","好饿好饿 你吃饭了吗 不许说还没吃","中午休息下不 别一直盯着屏幕","今天中午吃麻辣烫 真贵 以前才20多"];
+
+const LM_AFTERNOON = ["下午好困…你是不是也困","好无聊哦 你在干嘛 给我讲讲","刚刷到一个视频笑死 发你了 [动画表情]","今天下午喝了奶茶 你别说我胖 已经喝了"];
+
+const LM_EVENING = ["天快黑了 你今天过得咋样","好想你啊 你忙完记得找我~","突然好想吃火锅 咱俩啥时候去吃一顿","今天面试凉了呜呜 快安慰我[苦涩]"];
+
+const LM_NIGHT = ["洗完澡躺床上了 你也赶紧的","在刷剧 看到男女主吵架 气死了","不早了哦 明天还要起吧 早点休息","我今天好累 但是不想睡 陪我聊会儿~"];
+
+const LM_ALL = ["突然想到一个好笑的梗 算了不说了","今天下楼看到猫了 好粘人 跟你一样","在想你 没什么事 就是想你了","好烦 今天被我妈念叨了","看到别人遛狗 好可爱 以后我们也养一只"];
+
+// ============ 知性姐姐 ============
+const ZJ_MORNING = ["早，今天天气不错，记得吃早餐","刚煮了杯咖啡，新的一天开始了😊","早上好，昨晚睡得好吗","今天有什么计划吗，加油哦"];
+
+const ZJ_NOON = ["到午饭时间了，别忙得忘记吃","今天食堂有糖醋排骨，忍不住多要了份","休息一下，午饭后走走对身体好","工作要紧但身体更重要，记得吃饭"];
+
+const ZJ_AFTERNOON = ["下午了，困的话喝点茶","我在看一本很有意思的书，推荐给你","今天过得顺利吗，有什么烦心事可以说给我听","忙完了吗，适当摸鱼有益健康"];
+
+const ZJ_EVENING = ["下班了，今天很累吧，辛苦了","晚上记得吃点好的犒劳自己","今天加班吗？别太拼了","回家路上注意安全"];
+
+const ZJ_NIGHT = ["不早了，还在忙吗","早点休息，明天又是新的一天","睡前看书比看手机好入眠哦","晚安，愿你有个好梦🌙"];
+
+const ZJ_ALL = ["看到一句话，很适合你：'万物皆有裂痕，那是光照进来的地方'","今天收到了学妹寄的手作饼干，好幸福","泡了杯蜂蜜柚子茶，心情都好了","加班真的能提升生产力吗？我觉得不能😅","音乐节要来了，想去看看"];
+
+// ============ 搞笑闺蜜 ============
+const GM_MORNING = ["我的天我睡到刚才 迟到了哈哈哈哈","早！昨天晚上刷视频刷到三点 我感觉快死了🤣","醒了醒了 别喊了 已经在以0.5倍速起床了","今天闹钟响了我以为是在做梦 梦里还有工资呢"];
+
+const GM_NOON = ["饿死我了我真的好饿 你带吃的没给我们姐妹俩","我点了个外卖 打开发现是某人的照片 真下头[裂开]","中午了姐妹们 该吃吃该喝喝 反正下午继续摸鱼","刚被领导cue了 说我上周只干了三件事 我看了一下 居然是真的🤡"];
+
+const GM_AFTERNOON = ["下午好困 谁来拯救一下 或者给我发个搞笑视频也行","我刚刚在工位上面无表情地转动椅子 被同事问我还好吗","摸鱼摸到鱼都认识我了 这个班是一天都不想上了","刷到一个巨离谱的视频 我发你 你看了别笑出声"];
+
+const GM_EVENING = ["下班了家人们 今天又是没被开除的一天 可喜可贺","我想吃火锅 吃炸鸡 吃冰淇淋 吃完再减肥 反正也没瘦过","我今天怎么又加班了 这个班到底什么时候才是个头","看了一个综艺 笑到我室友以为我在精神分裂🤣"];
+
+const GM_NIGHT = ["不睡 今天不睡 明天不上班 后天也不上 我精神自由🤣","洗完澡了 感觉好困 但是还想刷一下手机 人生就是这样矛盾的","你快睡觉 别熬夜 虽然我还在看但我是为你好","晚安家人们 明天继续搬砖 或者被砖搬"];
+
+const GM_ALL = ["救命 我刚刚干了一件纯纯蠢事 太尴尬了 我应该马上失忆","最近迷上了一件事：看地铁上的人 猜他们是什么星座 太有意思了","今天同事问我脖子酸不酸 我说酸啊 他说那你继续低头看手机 我：…","我的人生信条：遇到事情不要急，先拍照发社交网络"];
+
+// ============ 顾昀迟 ============
+const GYC_MORNING = ["起了没。","吃早饭。","今天有安排？","醒着就回一下。"];
+
+const GYC_NOON = ["吃饭，别饿着。","午饭吃了什么。拍给我看。","不许吃泡面。"];
+
+const GYC_AFTERNOON = ["在做什么。","发定位。","别太累。","……没事，就问问。"];
+
+const GYC_EVENING = ["回来了吗。","到哪了，我去接你。","今天还行？"];
+
+const GYC_NIGHT = ["睡了没。","别熬夜。","睡不着就数羊。","手机放下，闭眼。"];
+
+const GYC_ALL = ["……","没事。就想确认你还活着。","想你了。别说出去。"];
+
+// ============ 角色消息池 ============
+const CHAR_POOLS = {
+  "lan-xiao-meng": { morning: LM_MORNING, noon: LM_NOON, afternoon: LM_AFTERNOON, evening: LM_EVENING, night: LM_NIGHT, all: LM_ALL },
+  "zhi-xing-jie-jie": { morning: ZJ_MORNING, noon: ZJ_NOON, afternoon: ZJ_AFTERNOON, evening: ZJ_EVENING, night: ZJ_NIGHT, all: ZJ_ALL },
+  "gao-xiao-gui-mi": { morning: GM_MORNING, noon: GM_NOON, afternoon: GM_AFTERNOON, evening: GM_EVENING, night: GM_NIGHT, all: GM_ALL },
+  "gu-yun-chi": { morning: GYC_MORNING, noon: GYC_NOON, afternoon: GYC_AFTERNOON, evening: GYC_EVENING, night: GYC_NIGHT, all: GYC_ALL },
+};
+
+export function generateProactiveMessage(lastUserMsg, facts, characterPref) {
+  // 根据角色 ID 选消息池
+  let charId = "lan-xiao-meng";
+  if (characterPref && characterPref.characterPath) {
+    const match = characterPref.characterPath.match(/config\/characters\/([^.]+)\.json/);
+    if (match) charId = match[1];
+  }
+  const pools = CHAR_POOLS[charId] || CHAR_POOLS["lan-xiao-meng"];
   const period = getHourPeriod();
-  const pools = {
-    morning: MORNING_MSGS,
-    afternoon: AFTERNOON_MSGS,
-    evening: EVENING_MSGS,
-    night: NIGHT_MSGS,
-  };
+  const periodPool = pools[period] || pools.all;
 
-  // 如果有事实记忆，10% 概率引用一条
-  if (facts && facts.length > 0 && Math.random() < 0.1) {
+  // 事实引用（20%概率）
+  if (facts && facts.length > 0 && Math.random() < 0.2) {
     const fact = pickRandom(facts);
-    const refs = [
-      `对了老板，上次你说${fact.value}…我就是突然想起来了，随便问问~`,
-      `${fact.key}是${fact.value}——嘿嘿我还记得呢。老板你是不是觉得我记性特别好？`,
-      `刚刚翻了下小本本，看到你之前说过${fact.value}。老板你最近还这样吗？`,
-    ];
+    const refs = [`上次你说${fact.value}…突然想起来，随便问问`];
     return pickRandom(refs);
   }
 
-  // 60% 时段消息 + 30% 随机想法 + 10% 上下文衔接
-  const roll = Math.random();
-
-  if (roll < 0.6) {
-    return pickRandom(pools[period]);
-  } else if (roll < 0.9) {
-    return pickRandom(RANDOM_THOUGHTS);
-  } else {
-    const hint = getContextHint(lastUserMsg);
-    if (hint) {
-      return `老板你之前说的"${hint}"…我突然又想到了！不过具体想到什么我忘了，就是想找你聊聊天~`;
-    }
-    return pickRandom(RANDOM_THOUGHTS);
+  // 时段消息 60% + 通用 40%
+  if (Math.random() < 0.6 && periodPool.length > 0) {
+    return pickRandom(periodPool);
   }
+  return pickRandom(pools.all);
 }

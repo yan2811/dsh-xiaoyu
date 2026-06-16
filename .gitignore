@@ -1,6 +1,7 @@
 .env
 node_modules/
 data/memory/
+data/chat.db
 *.token.json
 *.jpg
 *.png
