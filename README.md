@@ -1,4 +1,4 @@
-# 蓝小梦 — 多角色 AI 聊天平台
+# dsh-小鱼 — 多角色 AI 聊天平台
 
 基于 DeepSeek + 千问视觉 + 微信桥接的 AI 伴侣平台。支持**微信扫码聊天**和**网页聊天**，多角色可切换，SQLite 存储。
 
@@ -43,7 +43,7 @@
 ## 项目结构
 
 ```
-蓝小梦/
+dsh-小鱼/
 ├── README.md
 ├── package.json
 ├── .env                        # 环境变量（不入 Git）
@@ -121,8 +121,8 @@ apt install -y nodejs git
 
 # 3. 拉取项目
 cd /root
-git clone https://github.com/yan2811/lan-xiao-meng.git
-cd lan-xiao-meng
+git clone https://github.com/yan2811/dsh-xiaoyu.git
+cd dsh-xiaoyu
 
 # 4. 安装依赖
 npm install
@@ -369,7 +369,7 @@ pm2 startup
 
 ### 仓库地址
 
-https://github.com/yan2811/lan-xiao-meng.git
+https://github.com/yan2811/dsh-xiaoyu.git
 
 ### 推送
 

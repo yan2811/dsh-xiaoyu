@@ -1,7 +1,7 @@
 {
-  "name": "lan-xiao-meng",
+  "name": "dsh-xiaoyu",
   "version": "1.0.0",
-  "description": "蓝小梦 — 基于永劫无间角色「蓝梦」的 AI 女友 Agent，支持 CLI 聊天和微信扫码接入",
+  "description": "dsh-小鱼 — 基于 DeepSeek 的 QQ AI 伴侣 Agent，支持 QQ、微信和网页聊天",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
