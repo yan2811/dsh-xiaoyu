@@ -355,7 +355,7 @@ export async function handleWebRequest(req, res) {
     }
     const page = url.searchParams.get("page");
     if (page === "chars" || page === "select") {
-      const chars = getAllCharacters().filter(c => !c.profile_path.includes("lan-xiao-meng"));
+      const chars = getAllCharacters();
       return html(res, characterSelectPage(chars));
     }
     if (page === "wxconnect") {
@@ -410,7 +410,7 @@ export async function handleWebRequest(req, res) {
     return handleChatHistory(res, session);
   }
   if (url.pathname === "/api/characters" && method === "GET") {
-    return json(res, getAllCharacters().filter(c => !c.profile_path.includes("lan-xiao-meng")));
+    return json(res, getAllCharacters());
   }
   if (url.pathname === "/api/user/select-char" && method === "POST") {
     return handleSelectChar(body, res, session);

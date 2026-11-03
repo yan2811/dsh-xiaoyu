@@ -614,7 +614,7 @@ function isMentioned(message) {
 }
 
 // 群里叫名字也算是在找她
-const NAME_RE = /(大肥鱼|蓝小梦|鲸鱼娘|小肥鱼|鱼鱼)/;
+const NAME_RE = /(大肥鱼|dsh-小鱼|鲸鱼娘|小肥鱼|鱼鱼)/;
 function isCalledByName(message) {
   const t = (message || [])
     .filter(seg => seg.type === "text")
@@ -1835,7 +1835,7 @@ function getOrCreateQQUser(qq) {
 }
 
 function visibleCharacters() {
-  return getAllCharacters().filter(c => !c.profile_path.includes("lan-xiao-meng"));
+  return getAllCharacters();
 }
 
 function defaultCharacter() {
@@ -1843,7 +1843,7 @@ function defaultCharacter() {
   return all.find(c => c.name === "蓝色大肥鱼")
     || all.find(c => c.id === DEFAULT_CHAR_ID)
     || all.find(c => c.name === "顾昀迟")
-    || all.find(c => c.id !== 1)
+    || all[0]
     || { id: 1, profile_path: "config/characters/da-fei-yu.json" };
 }
 
@@ -1862,13 +1862,6 @@ function getCharName(qq) {
 
 function handleCharCommand(qq, text) {
   const parts = text.trim().split(/\s+/);
-  if (parts.length >= 2 && parts[1] === "5201314") {
-    const ryt = getAllCharacters().find(c => c.id === 1);
-    if (ryt) {
-      charPref.set(String(qq), { characterId: ryt.id, characterPath: ryt.profile_path });
-      return `切换为 ${ryt.name}！`;
-    }
-  }
   const chars = visibleCharacters();
   if (parts.length < 2) {
     return "用法：/char 数字\n" + chars.map(c => `${c.id}. ${c.name}`).join("\n");
@@ -1888,7 +1881,6 @@ function sleep(ms) {
 
 seedCharacters([
   { name: "蓝色大肥鱼", profile_path: "config/characters/da-fei-yu.json" },
-  { name: "阮怡婷", profile_path: "config/characters/lan-xiao-meng.json" },
   { name: "顾昀迟", profile_path: "config/characters/gu-yun-chi.json" },
   { name: "晏烬", profile_path: "config/characters/yan-jin.json" },
   { name: "紫零", profile_path: "config/characters/zi-ling.json" },

@@ -99,22 +99,12 @@ function getOrCreateWxUser(wxUid) {
 }
 
 // 微信内切换角色命令 /char 1 /char 2 /char 3
-// 可见角色列表（隐藏 lan-xiao-meng 角色，仅通过 /char 5201314 切换）
-const HIDDEN_PROFILE = "lan-xiao-meng";
 function getVisibleCharacters() {
-  return getAllCharacters().filter(c => !c.profile_path.includes(HIDDEN_PROFILE));
+  return getAllCharacters();
 }
 
 function handleCharCommand(uid, text) {
   const parts = text.trim().split(/\s+/);
-  // 特特别别码切换到阮怡婷
-  if (parts.length >= 2 && parts[1] === "5201314") {
-    const ryt = getAllCharacters().find(c => c.id === 1);
-    if (ryt) {
-      setWxCharPreference(uid, { characterId: ryt.id, characterPath: ryt.profile_path });
-      return { text: "切换为 " + ryt.name + "！" };
-    }
-  }
   const chars = getVisibleCharacters();
   if (parts.length < 2) {
     return { text: "用法：/char 数字\n" + chars.map(c => c.id + ". " + c.name).join("\n") };
@@ -686,7 +676,6 @@ if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY.includes("your
 console.log("🗄️  初始化数据库...");
 seedCharacters([
   { name: "蓝色大肥鱼", profile_path: "config/characters/da-fei-yu.json" },
-  { name: "阮怡婷", profile_path: "config/characters/lan-xiao-meng.json" },
   { name: "顾昀迟", profile_path: "config/characters/gu-yun-chi.json" },
   { name: "晏烬", profile_path: "config/characters/yan-jin.json" },
   { name: "紫零", profile_path: "config/characters/zi-ling.json" },

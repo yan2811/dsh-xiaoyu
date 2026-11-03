@@ -27,7 +27,7 @@
 
 | 功能 | 说明 |
 |------|------|
-| 多角色 | 顾昀迟、晏烬、阮怡婷（隐藏），可扩展 |
+| 多角色 | 蓝色大肥鱼、顾昀迟、晏烬、紫零，可扩展 |
 | 微信接入 | 扫码即连，支持图片识别、长句拆分 |
 | Web 聊天 | 注册/登录/选角色，浏览器直接聊 |
 | SQLite 存储 | 用户、对话、记忆、摘要全部入库 |
@@ -50,9 +50,8 @@ dsh-小鱼/
 ├── .env.example                # 环境变量模板
 ├── .gitignore                  # 排除 .env / node_modules / data
 ├── config/
-│   ├── lanmeng-profile.json    # 阮怡婷人设（旧版兼容）
+│   ├── lanmeng-profile.json    # 旧版兼容人设（诺诺，未启用）
 │   └── characters/             # 角色配置
-│       ├── lan-xiao-meng.json  # 阮怡婷（id=1，隐藏，密码 5201314）
 │       ├── gu-yun-chi.json     # 顾昀迟（id=25，默认）
 │       ├── gu-yun-chi-lore.json# 顾昀迟原著记忆库
 │       ├── yan-jin.json        # 晏烬（id=78）
@@ -206,7 +205,6 @@ node -e "const D=require('better-sqlite3');const db=new D('data/chat.db');db.exe
 
 | ID | 角色 | 状态 | 切换方式 | 风格 |
 |----|------|------|---------|------|
-| 1 | 阮怡婷 | **隐藏** | `/char 5201314` | 随性大四女生，撒娇吐槽 |
 | 25 | 顾昀迟 | **默认** | `/char 25` | 毒舌偏执上校，外冷内柔 |
 | 78 | 晏烬 | 可见 | `/char 78` | 寡言剑客，路痴甜食控 |
 
@@ -327,7 +325,6 @@ vision.js → 转 base64 → 调用千问 qwen-vl-max
 | `/chars` | 查看可见角色列表 |
 | `/char 25` | 切换到顾昀迟 |
 | `/char 78` | 切换到晏烬 |
-| `/char 5201314` | 切换到阮怡婷（隐藏） |
 | `/wake` | 开启主动消息 |
 | `/sleep` | 关闭主动消息 |
 | `/ping` | 检查在线状态 |
