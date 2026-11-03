@@ -65,10 +65,54 @@ function initTables() {
       FOREIGN KEY (character_id) REFERENCES characters(id)
     );
 
+    CREATE TABLE IF NOT EXISTS memories (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      character_id INTEGER NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('event','preference','emotion','relationship','daily','promise')),
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      importance INTEGER NOT NULL DEFAULT 50,
+      source TEXT NOT NULL DEFAULT 'chat',
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      last_hit_at INTEGER,
+      archived INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (character_id) REFERENCES characters(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS glossary (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      term TEXT NOT NULL UNIQUE,
+      aliases TEXT NOT NULL DEFAULT '',
+      meaning TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'meme',
+      source TEXT NOT NULL DEFAULT '',
+      confidence INTEGER NOT NULL DEFAULT 50,
+      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      last_hit_at INTEGER
+    );
+
     CREATE INDEX IF NOT EXISTS idx_messages_user_char ON messages(user_id, character_id);
     CREATE INDEX IF NOT EXISTS idx_facts_user_char ON facts(user_id, character_id);
     CREATE INDEX IF NOT EXISTS idx_summaries_user_char ON summaries(user_id, character_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_unique ON memories(user_id, character_id, category, key);
+    CREATE INDEX IF NOT EXISTS idx_memories_lookup ON memories(user_id, character_id, archived, importance);
+    CREATE INDEX IF NOT EXISTS idx_glossary_term ON glossary(term);
+    CREATE INDEX IF NOT EXISTS idx_glossary_updated ON glossary(updated_at);
   `);
+
+  // 旧 facts 迁移到 memories（幂等）
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO memories (user_id, character_id, category, key, value, importance, source)
+      SELECT user_id, character_id, 'daily', key, value, 50, 'migrated' FROM facts;
+    `);
+  } catch {}
 }
 
 // ==================== 用户 ====================
@@ -173,6 +217,129 @@ export function getFacts(userId, characterId, limit = 30) {
   return getDB().prepare(
     "SELECT key, value, time FROM facts WHERE user_id = ? AND character_id = ? ORDER BY time DESC LIMIT ?"
   ).all(userId, characterId, limit);
+}
+
+// ==================== 六类长期记忆 ====================
+
+export const MEMORY_CATEGORIES = ["event", "preference", "emotion", "relationship", "daily", "promise"];
+
+export function upsertMemory({ userId, characterId, category, key, value, importance = 50, source = "chat" }) {
+  const cat = MEMORY_CATEGORIES.includes(category) ? category : "daily";
+  const k = String(key || "").trim().slice(0, 60);
+  const v = String(value || "").trim().slice(0, 300);
+  if (!k || !v) return null;
+  const imp = Math.max(0, Math.min(100, Math.round(Number(importance) || 50)));
+  const db = getDB();
+
+  const existing = db.prepare(
+    "SELECT id, importance FROM memories WHERE user_id = ? AND character_id = ? AND category = ? AND key = ?"
+  ).get(userId, characterId, cat, k);
+
+  if (existing) {
+    db.prepare(
+      "UPDATE memories SET value = ?, importance = MAX(importance, ?), updated_at = ?, archived = 0 WHERE id = ?"
+    ).run(v, imp, Date.now(), existing.id);
+    return db.prepare("SELECT * FROM memories WHERE id = ?").get(existing.id);
+  }
+
+  const info = db.prepare(
+    "INSERT INTO memories (user_id, character_id, category, key, value, importance, source, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(userId, characterId, cat, k, v, imp, source, Date.now());
+  return db.prepare("SELECT * FROM memories WHERE id = ?").get(info.lastInsertRowid);
+}
+
+export function getMemories(userId, characterId, limit = 200) {
+  return getDB().prepare(
+    "SELECT * FROM memories WHERE user_id = ? AND character_id = ? AND archived = 0 ORDER BY importance DESC, updated_at DESC LIMIT ?"
+  ).all(userId, characterId, limit);
+}
+
+export function deleteMemory(id) {
+  getDB().prepare("DELETE FROM memories WHERE id = ?").run(id);
+}
+
+export function archiveMemory(id) {
+  getDB().prepare("UPDATE memories SET archived = 1, updated_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+export function markMemoryHit(id) {
+  getDB().prepare("UPDATE memories SET hit_count = hit_count + 1, last_hit_at = ? WHERE id = ?").run(Date.now(), id);
+}
+
+export function getMemoryCounts(userId, characterId) {
+  return getDB().prepare(
+    "SELECT category, COUNT(*) as count FROM memories WHERE user_id = ? AND character_id = ? AND archived = 0 GROUP BY category"
+  ).all(userId, characterId);
+}
+
+// ==================== 梗 / 网络词 ====================
+
+function normalizeAliases(aliases) {
+  const arr = Array.isArray(aliases)
+    ? aliases
+    : String(aliases || "").split(/[,，、;；]/);
+  return [...new Set(arr.map(s => String(s).trim()).filter(Boolean))].join(",");
+}
+
+export function upsertGlossary({ term, aliases = "", meaning, category = "meme", source = "", confidence = 50 }) {
+  const t = String(term || "").trim().slice(0, 30);
+  const m = String(meaning || "").trim().slice(0, 500);
+  if (!t || !m) return null;
+
+  const db = getDB();
+  const a = normalizeAliases(aliases);
+  const cat = String(category || "meme").slice(0, 20);
+  const src = String(source || "").slice(0, 300);
+  const conf = Math.max(0, Math.min(100, Math.round(Number(confidence) || 50)));
+  const existing = db.prepare("SELECT id FROM glossary WHERE term = ? COLLATE NOCASE").get(t);
+
+  if (existing) {
+    db.prepare(
+      "UPDATE glossary SET aliases = ?, meaning = ?, category = ?, source = ?, confidence = MAX(confidence, ?), updated_at = ? WHERE id = ?"
+    ).run(a, m, cat, src, conf, Date.now(), existing.id);
+    return db.prepare("SELECT * FROM glossary WHERE id = ?").get(existing.id);
+  }
+
+  const info = db.prepare(
+    "INSERT INTO glossary (term, aliases, meaning, category, source, confidence, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(t, a, m, cat, src, conf, Date.now());
+  return db.prepare("SELECT * FROM glossary WHERE id = ?").get(info.lastInsertRowid);
+}
+
+export function getGlossary(term) {
+  const t = String(term || "").trim();
+  if (!t) return null;
+  return getDB().prepare(
+    `SELECT * FROM glossary
+     WHERE term = ? COLLATE NOCASE
+        OR (',' || aliases || ',') LIKE ? ESCAPE '\\'
+     ORDER BY confidence DESC, updated_at DESC
+     LIMIT 1`
+  ).get(t, `%,${t.replace(/[\\%_]/g, "\\$&")},%`) || null;
+}
+
+export function listGlossary(limit = 500) {
+  return getDB().prepare(
+    "SELECT * FROM glossary ORDER BY updated_at DESC, confidence DESC LIMIT ?"
+  ).all(Math.max(1, Math.min(2000, Number(limit) || 500)));
+}
+
+export function deleteGlossary(idOrTerm) {
+  const db = getDB();
+  if (typeof idOrTerm === "number" || /^\d+$/.test(String(idOrTerm))) {
+    return db.prepare("DELETE FROM glossary WHERE id = ?").run(Number(idOrTerm)).changes;
+  }
+  return db.prepare("DELETE FROM glossary WHERE term = ? COLLATE NOCASE").run(String(idOrTerm)).changes;
+}
+
+export function bumpGlossaryHit(id) {
+  getDB().prepare(
+    "UPDATE glossary SET hit_count = hit_count + 1, last_hit_at = ? WHERE id = ?"
+  ).run(Date.now(), id);
+}
+
+export function getGlossaryCount() {
+  return getDB().prepare("SELECT COUNT(*) as count FROM glossary").get().count;
 }
 
 // ==================== 摘要 ====================

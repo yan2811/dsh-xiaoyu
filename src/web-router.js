@@ -18,6 +18,9 @@ export function getWxCharPreference(wxUid) {
 export function setWxCharPreference(wxUid, pref) {
   wxCharMap.set(wxUid, pref);
 }
+export function clearWxCharPreference(wxUid) {
+  wxCharMap.delete(wxUid);
+}
 
 function generateToken() {
   return crypto.randomBytes(32).toString("hex");
@@ -256,7 +259,7 @@ async function handleRegister(body, res) {
   const userId = createUser(username, hashPassword(password));
   const token = generateToken();
   const chars = getAllCharacters();
-  const defaultChar = chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" };
+  const defaultChar = chars.find(c => c.id === 25) || chars.find(c => c.id !== 1) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
   sessions.set(token, { userId, characterId: defaultChar.id, characterPath: defaultChar.profile_path });
   json(res, { ok: true, token, userId });
 }
@@ -272,7 +275,7 @@ async function handleLogin(body, res) {
   }
   const token = generateToken();
   const chars = getAllCharacters();
-  const defaultChar = chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" };
+  const defaultChar = chars.find(c => c.id === 25) || chars.find(c => c.id !== 1) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
   sessions.set(token, { userId: user.id, characterId: defaultChar.id, characterPath: defaultChar.profile_path });
   json(res, { ok: true, token, userId: user.id });
 }
@@ -352,7 +355,7 @@ export async function handleWebRequest(req, res) {
     }
     const page = url.searchParams.get("page");
     if (page === "chars" || page === "select") {
-      const chars = getAllCharacters();
+      const chars = getAllCharacters().filter(c => !c.profile_path.includes("lan-xiao-meng"));
       return html(res, characterSelectPage(chars));
     }
     if (page === "wxconnect") {
@@ -407,7 +410,7 @@ export async function handleWebRequest(req, res) {
     return handleChatHistory(res, session);
   }
   if (url.pathname === "/api/characters" && method === "GET") {
-    return json(res, getAllCharacters());
+    return json(res, getAllCharacters().filter(c => !c.profile_path.includes("lan-xiao-meng")));
   }
   if (url.pathname === "/api/user/select-char" && method === "POST") {
     return handleSelectChar(body, res, session);
@@ -431,7 +434,7 @@ export async function handleFormLogin(req, res) {
   }
   const token = generateToken();
   const chars = getAllCharacters();
-  const defaultChar = chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" };
+  const defaultChar = chars.find(c => c.id === 25) || chars.find(c => c.id !== 1) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
   sessions.set(token, { userId: user.id, characterId: defaultChar.id, characterPath: defaultChar.profile_path });
   res.writeHead(302, { Location: "/web?page=chars", "Set-Cookie": `token=${token}; Path=/; HttpOnly` });
   res.end();
@@ -454,7 +457,7 @@ export async function handleFormRegister(req, res) {
   const userId = createUser(username, hashPassword(password));
   const token = generateToken();
   const chars = getAllCharacters();
-  const defaultChar = chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" };
+  const defaultChar = chars.find(c => c.id === 25) || chars.find(c => c.id !== 1) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
   sessions.set(token, { userId, characterId: defaultChar.id, characterPath: defaultChar.profile_path });
   res.writeHead(302, { Location: "/web?page=chars", "Set-Cookie": `token=${token}; Path=/; HttpOnly` });
   res.end();

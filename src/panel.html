@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>蓝色大肥鱼 · 控制台</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; background: #0b1220; color: #e6eefc; font-family: -apple-system, "Microsoft YaHei", sans-serif; }
+  h1 { font-size: 20px; margin: 8px 4px 12px; font-weight: 700; }
+  .card { background: #121c2e; border: 1px solid #1e2f4a; border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; color: #9cc4ff; font-weight: 600; }
+  .row { margin-bottom: 14px; }
+  .row:last-child { margin-bottom: 0; }
+  .label { display: flex; justify-content: space-between; align-items: center; font-size: 14px; margin-bottom: 6px; }
+  .val { color: #5b9dff; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: #5b9dff; height: 28px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; background: #0b1424; color: #e6eefc; border: 1px solid #24395a; border-radius: 10px; padding: 9px 10px; font-size: 14px;
+  }
+  textarea { min-height: 62px; resize: vertical; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #9fb3d1; }
+  .inline input[type=checkbox] { width: 18px; height: 18px; accent-color: #5b9dff; }
+  .btn { border: 0; border-radius: 12px; padding: 11px 16px; background: #2d6cdf; color: white; font-size: 14px; font-weight: 600; }
+  .btn.ghost { background: #1a2a44; color: #9cc4ff; }
+  .actions { display: flex; gap: 10px; margin: 4px 0 16px; }
+  .status { font-size: 12px; color: #7f95b4; text-align: right; min-height: 18px; }
+  .summary { white-space: pre-wrap; font-size: 12px; color: #9fb3d1; line-height: 1.7; background: #0b1424; border-radius: 10px; padding: 10px; }
+  #tokenBox { display: none; }
+  .hint { font-size: 12px; color: #7f95b4; line-height: 1.6; }
+</style>
+</head>
+<body>
+  <h1>蓝色大肥鱼 · 控制台</h1>
+
+  <div class="card" id="tokenBox">
+    <h2>面板口令</h2>
+    <div class="row"><input type="text" id="tokenInput" placeholder="输入 PANEL_TOKEN"></div>
+    <button class="btn" id="tokenSave">进入</button>
+  </div>
+
+  <div class="card">
+    <h2>当前状态</h2>
+    <div class="summary" id="summary">加载中…</div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" id="saveAll">保存全部</button>
+    <button class="btn ghost" id="reload">刷新</button>
+  </div>
+  <div class="status" id="saveStatus"></div>
+
+  <div class="card">
+    <h2>性格</h2>
+    <div id="traits"></div>
+    <div class="hint" style="margin-top:10px">勾选「锁定」后，自主进化不会改动这一项。</div>
+    <div style="margin-top:12px"><button class="btn ghost" id="resetTraits">恢复默认性格</button></div>
+  </div>
+
+  <div class="card">
+    <h2>情绪</h2>
+    <div class="row">
+      <div class="label"><span>心情</span><span class="val" id="v-mood">0</span></div>
+      <input type="range" id="moodValue" min="-100" max="100" step="1">
+    </div>
+    <div class="row">
+      <div class="label"><span>精力</span><span class="val" id="v-energy">0</span></div>
+      <input type="range" id="moodEnergy" min="0" max="100" step="1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>情绪向量</h2>
+    <div id="emotions"></div>
+    <div class="hint" style="margin-top:10px">0~100，越高越强烈；会随时间自然衰减。</div>
+  </div>
+
+  <div class="card">
+    <h2>关系（主人）</h2>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>称呼</span></div><input type="text" id="relNickname" maxlength="12"></div>
+      <div class="row"><div class="label"><span>阶段</span></div>
+        <select id="relStage">
+          <option>陌生</option><option>认识</option><option>熟悉</option><option>亲近</option><option>自己人</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="label"><span>亲密度</span><span class="val" id="v-intimacy">0</span></div>
+      <input type="range" id="relIntimacy" min="0" max="100" step="1">
+    </div>
+    <div class="row"><div class="label"><span>态度</span></div><textarea id="relAttitude" maxlength="120"></textarea></div>
+  </div>
+
+  <div class="card">
+    <h2>关系里程碑</h2>
+    <div class="summary" id="milestoneSummary" style="margin-bottom:10px">还没有里程碑。</div>
+    <div class="grid2">
+      <div class="row"><input type="text" id="msTitle" placeholder="标题，例如：第一次见面"></div>
+      <div class="row"><input type="date" id="msDate"></div>
+    </div>
+    <div class="row">
+      <select id="msStage">
+        <option value="">不改变阶段</option>
+        <option>陌生</option><option>认识</option><option>熟悉</option><option>亲近</option><option>自己人</option>
+      </select>
+    </div>
+    <button class="btn ghost" id="msAdd">添加里程碑</button>
+    <div id="milestoneList" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2>表情包</h2>
+    <div class="row">
+      <div class="label"><span>强情绪触发概率</span><span class="val" id="v-strong">0%</span></div>
+      <input type="range" id="stickerStrong" min="0" max="100" step="1">
+    </div>
+    <div class="row">
+      <div class="label"><span>普通情绪触发概率</span><span class="val" id="v-weak">0%</span></div>
+      <input type="range" id="stickerWeak" min="0" max="100" step="1">
+    </div>
+    <div class="row">
+      <div class="label"><span>冷却（秒）</span><span class="val" id="v-cool">0</span></div>
+      <input type="range" id="stickerCool" min="0" max="30" step="1">
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>语音</h2>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>模式</span></div>
+        <select id="voiceMode">
+          <option value="off">关闭</option>
+          <option value="auto">自动</option>
+          <option value="on">总是</option>
+        </select>
+      </div>
+      <div class="row"><div class="label"><span>引擎</span></div>
+        <select id="voiceProvider">
+          <option value="qwen">千问 TTS</option>
+          <option value="cosyvoice">CosyVoice v3.5</option>
+          <option value="breeze">BreezeBlue</option>
+        </select>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>千问音色</span></div>
+        <select id="voiceId">
+          <option value="Chelsie">Chelsie 千雪</option>
+          <option value="Serena">Serena 苏瑶</option>
+          <option value="Momo">Momo 茉兔</option>
+          <option value="Vivian">Vivian 十三</option>
+          <option value="Bella">Bella 萌宝</option>
+          <option value="Cherry">Cherry 芊悦</option>
+          <option value="Maia">Maia 四月</option>
+        </select>
+      </div>
+      <div class="row"><div class="label"><span>语速</span><span class="val" id="v-voicerate">1.00</span></div>
+        <input type="range" id="voiceRate" min="0.5" max="2" step="0.05">
+      </div>
+    </div>
+    <div class="row"><div class="label"><span>CosyVoice voice_id</span></div>
+      <input type="text" id="cosyVoiceId" placeholder="cosyvoice-v3.5-flash-vd-...">
+    </div>
+    <div class="row"><div class="label"><span>CosyVoice 基础语气指令</span></div>
+      <input type="text" id="voiceBaseInstruction" placeholder="语速中等，声音清亮自然，像和熟人聊天">
+    </div>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>Breeze 音色 voice_id</span></div>
+        <input type="text" id="breezeVoiceId" placeholder="voc_...">
+      </div>
+      <div class="row"><div class="label"><span>Breeze 语速</span><span class="val" id="v-breezespeed">1.00</span></div>
+        <input type="range" id="breezeSpeed" min="0.5" max="2" step="0.05">
+      </div>
+    </div>
+    <div class="row"><div class="label"><span>Breeze 每日积分预算</span></div>
+      <input type="number" id="breezeDailyBudget" min="0" max="2000" step="10" placeholder="350">
+    </div>
+    <div class="row"><div class="label"><span>Breeze 基础语气指令</span></div>
+      <input type="text" id="breezeBaseInstruction" placeholder="自然口语，像和熟人聊天，语速中等，带一点笑意">
+    </div>
+    <div class="row"><div class="label"><span>冷却（秒）</span><span class="val" id="v-voicecd">180</span></div><input type="range" id="voiceCooldown" min="0" max="600" step="10"></div>
+    <div class="row"><div class="label"><span>自动触发情绪等级</span><span class="val" id="v-voicelv">6</span></div><input type="range" id="voiceMinLevel" min="0" max="10" step="1"></div>
+    <div class="row"><div class="label"><span>群聊默认模式</span></div>
+      <select id="voiceGroupMode">
+        <option value="off">关闭</option>
+        <option value="auto">自动</option>
+        <option value="on">总是</option>
+      </select>
+    </div>
+    <div class="hint">Breeze 走每日积分预算，预算不足或调用失败会自动回退 CosyVoice。QQ 里可用 /voice voice 迷糊|机灵|香农|知绘|哈基米 或直接发 voc_... 切换音色。</div>
+    <div class="hint">群聊里发 /voice on 可以单独开启当前群；自动模式只在情绪明显或你发语音时用语音，代码和长回答强制文字。</div>
+  </div>
+
+  <div class="card">
+    <h2>群聊</h2>
+    <div class="row">
+      <div class="label"><span>自动接话意愿</span><span class="val" id="v-willing">0%</span></div>
+      <input type="range" id="groupWillingness" min="0" max="100" step="1">
+    </div>
+    <div class="hint">只影响自动模式的群；被 @ 或叫名字时一定会回。</div>
+  </div>
+
+  <div class="card">
+    <h2>表达风格</h2>
+    <div class="row inline"><input type="checkbox" id="styleEnabled"><span>开启表达学习</span></div>
+    <div class="summary" id="styleSummary" style="margin-bottom:10px">还没学够，再聊几句。</div>
+    <div class="row"><input type="text" id="styleInput" placeholder="手动添加一个口头禅"></div>
+    <div class="actions" style="margin-bottom:0">
+      <button class="btn ghost" id="styleAdd">添加</button>
+      <button class="btn ghost" id="styleClear">清空学习记录</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>长期记忆</h2>
+    <div class="summary" id="memoryCounts" style="margin-bottom:10px">还没有记忆。</div>
+    <div class="grid2">
+      <div class="row">
+        <select id="memCategory">
+          <option value="promise">承诺</option>
+          <option value="relationship">关系</option>
+          <option value="event">事件</option>
+          <option value="preference">偏好</option>
+          <option value="emotion">情绪</option>
+          <option value="daily">日常</option>
+        </select>
+      </div>
+      <div class="row"><input type="number" id="memImportance" min="0" max="100" value="60" placeholder="重要度"></div>
+    </div>
+    <div class="row"><input type="text" id="memKey" placeholder="标签，例如：周六吃饭"></div>
+    <div class="row"><textarea id="memValue" placeholder="内容，例如：答应周六下午一起吃饭"></textarea></div>
+    <button class="btn ghost" id="memAdd">添加记忆</button>
+    <div id="memoryList" style="margin-top:12px"></div>
+  </div>
+
+  <div class="card">
+    <h2>主动消息</h2>
+    <div class="row inline"><input type="checkbox" id="proactiveEnabled"><span>开启主动消息</span></div>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>最短间隔（分钟）</span></div><input type="number" id="proactiveMin" min="1" max="1440"></div>
+      <div class="row"><div class="label"><span>最长间隔（分钟）</span></div><input type="number" id="proactiveMax" min="1" max="1440"></div>
+      <div class="row"><div class="label"><span>开始小时</span></div><input type="number" id="proactiveStart" min="0" max="23"></div>
+      <div class="row"><div class="label"><span>结束小时</span></div><input type="number" id="proactiveEnd" min="0" max="23"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>自主进化</h2>
+    <div class="row inline"><input type="checkbox" id="evoEnabled"><span>开启自动进化</span></div>
+    <div class="grid2">
+      <div class="row"><div class="label"><span>每多少条回顾</span></div><input type="number" id="evoEvery" min="10" max="200"></div>
+      <div class="row"><div class="label"><span>单次最大变化</span></div><input type="number" id="evoDelta" min="1" max="5"></div>
+    </div>
+    <div class="row"><div class="label"><span>自我叙事</span></div><textarea id="selfNarrative" maxlength="120" placeholder="最近我好像……"></textarea></div>
+    <div class="hint">这是她第一人称的“最近变化”，会注入聊天；进化会自动更新，也可以手动改。</div>
+  </div>
+
+<script>
+const TRAITS = [
+  ['tsundere', '傲娇'], ['clinginess', '黏人'], ['initiative', '主动'],
+  ['sharpness', '毒舌'], ['laziness', '摸鱼'], ['foodie', '吃货'],
+  ['gentleness', '温柔']
+];
+const EMOTIONS = [
+  ['happy', '开心'], ['angry', '生气'], ['sad', '委屈'], ['shy', '害羞'],
+  ['proud', '得意'], ['tired', '疲惫'], ['jealous', '吃醋'], ['clingy', '黏人']
+];
+const MEM_LABELS = {
+  promise: '承诺', relationship: '关系', event: '事件',
+  preference: '偏好', emotion: '情绪', daily: '日常'
+};
+let state = null;
+let saveTimer = null;
+
+function token() { return localStorage.getItem('panelToken') || ''; }
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'x-panel-token': token(), ...(opts.headers || {}) }
+  });
+  if (res.status === 401) {
+    document.getElementById('tokenBox').style.display = 'block';
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+function setStatus(text) {
+  document.getElementById('saveStatus').textContent = text;
+}
+
+function buildTraits() {
+  const box = document.getElementById('traits');
+  box.innerHTML = '';
+  for (const [key, label] of TRAITS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML =
+      '<div class="label"><span>' + label + '</span><span class="val" id="v-' + key + '">0</span></div>' +
+      '<input type="range" id="t-' + key + '" min="0" max="100" step="1">' +
+      '<div class="inline" style="margin-top:6px"><input type="checkbox" id="lock-' + key + '"><span>锁定</span></div>';
+    box.appendChild(row);
+    const slider = row.querySelector('#t-' + key);
+    slider.addEventListener('input', () => {
+      document.getElementById('v-' + key).textContent = slider.value;
+    });
+    slider.addEventListener('change', saveTraits);
+    row.querySelector('#lock-' + key).addEventListener('change', saveTraits);
+  }
+}
+
+function buildEmotions() {
+  const box = document.getElementById('emotions');
+  box.innerHTML = '';
+  for (const [key, label] of EMOTIONS) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML =
+      '<div class="label"><span>' + label + '</span><span class="val" id="v-emo-' + key + '">0</span></div>' +
+      '<input type="range" id="emo-' + key + '" min="0" max="100" step="1">';
+    box.appendChild(row);
+    const slider = row.querySelector('#emo-' + key);
+    slider.addEventListener('input', () => {
+      document.getElementById('v-emo-' + key).textContent = slider.value;
+    });
+    slider.addEventListener('change', saveEmotions);
+  }
+}
+
+function renderMilestones() {
+  const ms = state.milestones || [];
+  document.getElementById('milestoneSummary').textContent = ms.length
+    ? '共 ' + ms.length + ' 个里程碑'
+    : '还没有里程碑。';
+
+  const box = document.getElementById('milestoneList');
+  box.innerHTML = '';
+  for (const m of ms) {
+    const row = document.createElement('div');
+    row.style.cssText = 'border-top:1px solid #1e2f4a;padding:8px 0;display:flex;justify-content:space-between;gap:8px;align-items:center';
+    row.innerHTML =
+      '<div><div style="font-size:14px">' + m.title + '</div>' +
+      '<div style="font-size:12px;color:#7f95b4">' + (m.date || '') + (m.stageHint ? ' · ' + m.stageHint : '') + '</div></div>' +
+      '<button class="btn ghost" data-del-ms="' + m.id + '" style="padding:6px 10px;font-size:12px">删除</button>';
+    box.appendChild(row);
+  }
+}
+
+function renderMemories() {
+  const counts = state.memoryCounts || [];
+  document.getElementById('memoryCounts').textContent = counts.length
+    ? counts.map(x => MEM_LABELS[x.category] + ' ' + x.count).join(' / ')
+    : '还没有记忆。';
+
+  const box = document.getElementById('memoryList');
+  box.innerHTML = '';
+  for (const m of (state.memories || [])) {
+    const row = document.createElement('div');
+    row.style.cssText = 'border-top:1px solid #1e2f4a;padding:10px 0';
+    row.innerHTML =
+      '<div class="label"><span>#' + m.id + ' [' + (MEM_LABELS[m.category] || m.category) + '] ' + m.key + '</span>' +
+      '<span class="val">重要度 ' + m.importance + '</span></div>' +
+      '<div style="font-size:13px;color:#9fb3d1;line-height:1.5">' + m.value + '</div>' +
+      '<button class="btn ghost" data-del="' + m.id + '" style="margin-top:6px;padding:6px 10px;font-size:12px">删除</button>';
+    box.appendChild(row);
+  }
+}
+
+function render() {
+  const p = state.persona, r = state.relation, m = state.mood, s = state.settings;
+  for (const [key] of TRAITS) {
+    document.getElementById('t-' + key).value = p.traits[key];
+    document.getElementById('v-' + key).textContent = p.traits[key];
+    document.getElementById('lock-' + key).checked = (p.lockedTraits || []).includes(key);
+  }
+  document.getElementById('moodValue').value = Math.round(m.value);
+  document.getElementById('v-mood').textContent = Math.round(m.value);
+  document.getElementById('moodEnergy').value = Math.round(m.energy);
+  document.getElementById('v-energy').textContent = Math.round(m.energy);
+
+  for (const [key] of EMOTIONS) {
+    const v = Math.round(m.emotions[key] || 0);
+    document.getElementById('emo-' + key).value = v;
+    document.getElementById('v-emo-' + key).textContent = v;
+  }
+
+  const wing = Math.round((s.group?.willingness ?? 0.65) * 100);
+  document.getElementById('groupWillingness').value = wing;
+  document.getElementById('v-willing').textContent = wing + '%';
+
+  const v = s.voice || {};
+  document.getElementById('voiceMode').value = v.mode || 'auto';
+  document.getElementById('voiceProvider').value = v.provider || 'qwen';
+  document.getElementById('voiceId').value = v.voiceId || 'Maia';
+  document.getElementById('cosyVoiceId').value = v.cosyVoiceId || '';
+  document.getElementById('voiceBaseInstruction').value = v.baseInstruction || '';
+  document.getElementById('breezeVoiceId').value = v.breezeVoiceId || '';
+  document.getElementById('breezeBaseInstruction').value = v.breezeBaseInstruction || '';
+  document.getElementById('breezeDailyBudget').value = v.breezeDailyBudget ?? 350;
+  const bspeed = Number(v.breezeSpeed ?? 1);
+  document.getElementById('breezeSpeed').value = bspeed;
+  document.getElementById('v-breezespeed').textContent = bspeed.toFixed(2);
+  const vrate = Number(v.rate ?? 1);
+  document.getElementById('voiceRate').value = vrate;
+  document.getElementById('v-voicerate').textContent = vrate.toFixed(2);
+  const vcd = Math.round((v.cooldownMs ?? 180000) / 1000);
+  document.getElementById('voiceCooldown').value = vcd;
+  document.getElementById('v-voicecd').textContent = vcd;
+  const vlv = v.autoMinEmotionLevel ?? 6;
+  document.getElementById('voiceMinLevel').value = vlv;
+  document.getElementById('v-voicelv').textContent = vlv;
+  document.getElementById('voiceGroupMode').value = v.groupMode || 'off';
+
+  document.getElementById('styleEnabled').checked = !!state.style?.enabled;
+  document.getElementById('styleSummary').textContent = state.style?.summary || '还没学够，再聊几句。';
+  const msDate = document.getElementById('msDate');
+  if (msDate && !msDate.value) msDate.value = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+
+  renderMemories();
+  renderMilestones();
+
+  document.getElementById('relNickname').value = r.nickname || '';
+  document.getElementById('relStage').value = r.stage || '认识';
+  document.getElementById('relIntimacy').value = r.intimacy;
+  document.getElementById('v-intimacy').textContent = r.intimacy;
+  document.getElementById('relAttitude').value = r.attitude || '';
+
+  document.getElementById('stickerStrong').value = Math.round(s.sticker.strongChance * 100);
+  document.getElementById('v-strong').textContent = Math.round(s.sticker.strongChance * 100) + '%';
+  document.getElementById('stickerWeak').value = Math.round(s.sticker.weakChance * 100);
+  document.getElementById('v-weak').textContent = Math.round(s.sticker.weakChance * 100) + '%';
+  document.getElementById('stickerCool').value = Math.round(s.sticker.cooldownMs / 1000);
+  document.getElementById('v-cool').textContent = Math.round(s.sticker.cooldownMs / 1000);
+
+  document.getElementById('proactiveEnabled').checked = s.proactive.enabled;
+  document.getElementById('proactiveMin').value = s.proactive.minMinutes;
+  document.getElementById('proactiveMax').value = s.proactive.maxMinutes;
+  document.getElementById('proactiveStart').value = s.proactive.startHour;
+  document.getElementById('proactiveEnd').value = s.proactive.endHour;
+
+  document.getElementById('evoEnabled').checked = s.evolution.enabled;
+  document.getElementById('evoEvery').value = s.evolution.everyMessages;
+  document.getElementById('evoDelta').value = s.evolution.maxTraitDelta;
+  document.getElementById('selfNarrative').value = state.persona.selfNarrative || '';
+
+  document.getElementById('summary').textContent = state.summary || '';
+}
+
+async function load() {
+  try {
+    state = await api('/api/state');
+    render();
+    setStatus('已加载');
+  } catch (e) {
+    setStatus(e.message === 'unauthorized' ? '请输入面板口令' : '加载失败：' + e.message);
+  }
+}
+
+function schedule(fn) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(fn, 350);
+}
+
+async function saveTraits() {
+  const traits = {}, locks = [];
+  for (const [key] of TRAITS) {
+    traits[key] = Number(document.getElementById('t-' + key).value);
+    if (document.getElementById('lock-' + key).checked) locks.push(key);
+  }
+  try {
+    await api('/api/persona', { method: 'POST', body: JSON.stringify({ traits, lockedTraits: locks }) });
+    setStatus('性格已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveMood() {
+  const value = Number(document.getElementById('moodValue').value);
+  const energy = Number(document.getElementById('moodEnergy').value);
+  try {
+    await api('/api/mood', { method: 'POST', body: JSON.stringify({ value, energy }) });
+    setStatus('心情已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveEmotions() {
+  const emotions = {};
+  for (const [key] of EMOTIONS) emotions[key] = Number(document.getElementById('emo-' + key).value);
+  try {
+    // 只传情绪，让后端根据情绪向量反推总体心情
+    await api('/api/mood', { method: 'POST', body: JSON.stringify({ emotions }) });
+    setStatus('情绪向量已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveRelation() {
+  const body = {
+    nickname: document.getElementById('relNickname').value,
+    stage: document.getElementById('relStage').value,
+    intimacy: Number(document.getElementById('relIntimacy').value),
+    attitude: document.getElementById('relAttitude').value
+  };
+  try {
+    await api('/api/relation', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('关系已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveSticker() {
+  const body = { sticker: {
+    strongChance: Number(document.getElementById('stickerStrong').value) / 100,
+    weakChance: Number(document.getElementById('stickerWeak').value) / 100,
+    cooldownMs: Number(document.getElementById('stickerCool').value) * 1000
+  }};
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('表情设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function addMilestoneUI() {
+  const title = document.getElementById('msTitle').value.trim();
+  const date = document.getElementById('msDate').value;
+  const stageHint = document.getElementById('msStage').value;
+  if (!title) { setStatus('里程碑标题不能为空'); return; }
+  try {
+    await api('/api/milestone', { method: 'POST', body: JSON.stringify({ add: { title, date, stageHint } }) });
+    document.getElementById('msTitle').value = '';
+    await load();
+    setStatus('里程碑已添加');
+  } catch (e) { setStatus('添加失败：' + e.message); }
+}
+
+async function addMemory() {
+  const category = document.getElementById('memCategory').value;
+  const importance = Number(document.getElementById('memImportance').value);
+  const key = document.getElementById('memKey').value.trim();
+  const value = document.getElementById('memValue').value.trim();
+  if (!key || !value) { setStatus('标签和内容都要填'); return; }
+  try {
+    await api('/api/memory', { method: 'POST', body: JSON.stringify({ add: { category, importance, key, value } }) });
+    document.getElementById('memKey').value = '';
+    document.getElementById('memValue').value = '';
+    await load();
+    setStatus('记忆已添加');
+  } catch (e) { setStatus('添加失败：' + e.message); }
+}
+
+async function saveStyleEnabled() {
+  try {
+    await api('/api/style', { method: 'POST', body: JSON.stringify({ enabled: document.getElementById('styleEnabled').checked }) });
+    setStatus('表达学习设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function addStyle() {
+  const text = document.getElementById('styleInput').value.trim();
+  if (!text) return;
+  try {
+    await api('/api/style', { method: 'POST', body: JSON.stringify({ add: text }) });
+    document.getElementById('styleInput').value = '';
+    await load();
+    setStatus('口头禅已添加');
+  } catch (e) { setStatus('添加失败：' + e.message); }
+}
+
+async function clearStyleData() {
+  try {
+    await api('/api/style', { method: 'POST', body: JSON.stringify({ clear: true }) });
+    await load();
+    setStatus('表达记录已清空');
+  } catch (e) { setStatus('清空失败：' + e.message); }
+}
+
+async function saveVoice() {
+  const body = { voice: {
+    mode: document.getElementById('voiceMode').value,
+    provider: document.getElementById('voiceProvider').value,
+    voiceId: document.getElementById('voiceId').value,
+    cosyVoiceId: document.getElementById('cosyVoiceId').value.trim(),
+    baseInstruction: document.getElementById('voiceBaseInstruction').value.trim(),
+    rate: Number(document.getElementById('voiceRate').value),
+    breezeVoiceId: document.getElementById('breezeVoiceId').value.trim(),
+    breezeBaseInstruction: document.getElementById('breezeBaseInstruction').value.trim(),
+    breezeSpeed: Number(document.getElementById('breezeSpeed').value),
+    breezeDailyBudget: Number(document.getElementById('breezeDailyBudget').value),
+    cooldownMs: Number(document.getElementById('voiceCooldown').value) * 1000,
+    autoMinEmotionLevel: Number(document.getElementById('voiceMinLevel').value),
+    groupMode: document.getElementById('voiceGroupMode').value
+  }};
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('语音设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveGroup() {
+  const body = { group: { willingness: Number(document.getElementById('groupWillingness').value) / 100 } };
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('群聊设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveProactive() {
+  const body = { proactive: {
+    enabled: document.getElementById('proactiveEnabled').checked,
+    minMinutes: Number(document.getElementById('proactiveMin').value),
+    maxMinutes: Number(document.getElementById('proactiveMax').value),
+    startHour: Number(document.getElementById('proactiveStart').value),
+    endHour: Number(document.getElementById('proactiveEnd').value)
+  }};
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('主动消息设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveNarrative() {
+  try {
+    await api('/api/persona', { method: 'POST', body: JSON.stringify({ selfNarrative: document.getElementById('selfNarrative').value }) });
+    setStatus('自我叙事已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+async function saveEvolution() {
+  const body = { evolution: {
+    enabled: document.getElementById('evoEnabled').checked,
+    everyMessages: Number(document.getElementById('evoEvery').value),
+    maxTraitDelta: Number(document.getElementById('evoDelta').value)
+  }};
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
+    setStatus('进化设置已保存');
+  } catch (e) { setStatus('保存失败：' + e.message); }
+}
+
+buildTraits();
+buildEmotions();
+
+document.getElementById('moodValue').addEventListener('input', e => {
+  document.getElementById('v-mood').textContent = e.target.value;
+});
+document.getElementById('moodEnergy').addEventListener('input', e => {
+  document.getElementById('v-energy').textContent = e.target.value;
+});
+document.getElementById('relIntimacy').addEventListener('input', e => {
+  document.getElementById('v-intimacy').textContent = e.target.value;
+});
+document.getElementById('stickerStrong').addEventListener('input', e => {
+  document.getElementById('v-strong').textContent = e.target.value + '%';
+});
+document.getElementById('stickerWeak').addEventListener('input', e => {
+  document.getElementById('v-weak').textContent = e.target.value + '%';
+});
+document.getElementById('stickerCool').addEventListener('input', e => {
+  document.getElementById('v-cool').textContent = e.target.value;
+});
+document.getElementById('groupWillingness').addEventListener('input', e => {
+  document.getElementById('v-willing').textContent = e.target.value + '%';
+});
+document.getElementById('voiceCooldown').addEventListener('input', e => {
+  document.getElementById('v-voicecd').textContent = e.target.value;
+});
+document.getElementById('voiceMinLevel').addEventListener('input', e => {
+  document.getElementById('v-voicelv').textContent = e.target.value;
+});
+document.getElementById('voiceRate').addEventListener('input', e => {
+  document.getElementById('v-voicerate').textContent = Number(e.target.value).toFixed(2);
+});
+document.getElementById('breezeSpeed').addEventListener('input', e => {
+  document.getElementById('v-breezespeed').textContent = Number(e.target.value).toFixed(2);
+});
+
+for (const id of ['moodValue','moodEnergy']) document.getElementById(id).addEventListener('change', saveMood);
+for (const id of ['relNickname','relStage','relIntimacy','relAttitude']) document.getElementById(id).addEventListener('change', saveRelation);
+for (const id of ['stickerStrong','stickerWeak','stickerCool']) document.getElementById(id).addEventListener('change', saveSticker);
+document.getElementById('groupWillingness').addEventListener('change', saveGroup);
+for (const id of ['voiceMode','voiceProvider','voiceId','cosyVoiceId','voiceBaseInstruction','voiceRate','breezeVoiceId','breezeBaseInstruction','breezeSpeed','breezeDailyBudget','voiceCooldown','voiceMinLevel','voiceGroupMode']) {
+  document.getElementById(id).addEventListener('change', saveVoice);
+}
+document.getElementById('styleEnabled').addEventListener('change', saveStyleEnabled);
+document.getElementById('styleAdd').addEventListener('click', addStyle);
+document.getElementById('styleClear').addEventListener('click', clearStyleData);
+document.getElementById('memAdd').addEventListener('click', addMemory);
+document.getElementById('msAdd').addEventListener('click', addMilestoneUI);
+document.getElementById('milestoneList').addEventListener('click', async e => {
+  const id = e.target.dataset.delMs;
+  if (!id) return;
+  try {
+    await api('/api/milestone', { method: 'POST', body: JSON.stringify({ delete: Number(id) }) });
+    await load();
+    setStatus('里程碑已删除');
+  } catch (err) { setStatus('删除失败：' + err.message); }
+});
+document.getElementById('memoryList').addEventListener('click', async e => {
+  const id = e.target.dataset.del;
+  if (!id) return;
+  try {
+    await api('/api/memory', { method: 'POST', body: JSON.stringify({ delete: Number(id) }) });
+    await load();
+    setStatus('记忆已删除');
+  } catch (err) { setStatus('删除失败：' + err.message); }
+});
+for (const id of ['proactiveEnabled','proactiveMin','proactiveMax','proactiveStart','proactiveEnd']) document.getElementById(id).addEventListener('change', saveProactive);
+for (const id of ['evoEnabled','evoEvery','evoDelta']) document.getElementById(id).addEventListener('change', saveEvolution);
+document.getElementById('selfNarrative').addEventListener('change', saveNarrative);
+
+document.getElementById('saveAll').addEventListener('click', async () => {
+  // 顺序保存，避免多个设置同时读改写 settings.json 造成覆盖
+  await saveTraits();
+  await saveEmotions();
+  await saveMood();
+  await saveRelation();
+  await saveSticker();
+  await saveVoice();
+  await saveGroup();
+  await saveStyleEnabled();
+  await saveProactive();
+  await saveEvolution();
+  await saveNarrative();
+  setStatus('全部已保存');
+});
+document.getElementById('reload').addEventListener('click', load);
+document.getElementById('resetTraits').addEventListener('click', async () => {
+  try {
+    await api('/api/reset', { method: 'POST', body: '{}' });
+    await load();
+    setStatus('性格已恢复默认');
+  } catch (e) { setStatus('重置失败：' + e.message); }
+});
+document.getElementById('tokenSave').addEventListener('click', () => {
+  localStorage.setItem('panelToken', document.getElementById('tokenInput').value);
+  location.reload();
+});
+
+load();
+</script>
+</body>
+</html>

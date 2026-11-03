@@ -5,12 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import QRCode from "qrcode";
 import { handleMessage } from "./agent.js";
-import { getCharacterName, getUserNickname } from "./personality.js";
+import { getCharacterName, getUserNickname, buildCharacterPrompt } from "./personality.js";
 import { generateProactiveMessage } from "./proactive.js";
 import { getFacts } from "./memory.js";
 import { getDB, seedCharacters, getAllCharacters, createUser, getUserByUsername, migrateJSONtoDB } from "./db.js";
-import { handleWebRequest, handleFormLogin, handleFormRegister, getWxCharPreference, setWxCharPreference } from "./web-router.js";
+import { handleWebRequest, handleFormLogin, handleFormRegister, getWxCharPreference, setWxCharPreference, clearWxCharPreference } from "./web-router.js";
 import { describeImage } from "./vision.js";
+import { transcribeAudio } from "./asr.js";
+import { synthesize } from "./tts.js";
+import { wavToVideo } from "./video.js";
 
 // ============================================================
 // 蓝小梦 微信桥接 v3 (服务器版)
@@ -22,8 +25,8 @@ import { describeImage } from "./vision.js";
 const PORT = process.env.PORT || 3721;
 const ILINK_BASE = "https://ilinkai.weixin.qq.com";
 const CHARACTER = getCharacterName();
-const AUTO_MIN_MS = 15 * 60 * 1000; // 最短15分钟
-const AUTO_MAX_MS = 45 * 60 * 1000; // 最长45分钟
+const AUTO_MIN_MS = 30 * 60 * 1000; // 最短30分钟
+const AUTO_MAX_MS = 60 * 60 * 1000; // 最长60分钟
 const AUTO_START_HOUR = 8;
 const AUTO_END_HOUR = 23;
 
@@ -33,11 +36,18 @@ function randomInterval() {
 
 let sdk = null;
 let botInstance = null;
+let botAbortController = null;
 let proactiveEnabled = true; // 扫码连接后自动开启
 let lastActivityTime = Date.now();
 let lastUserMsg = "";
 let proactiveTimer = null;
 let nextProactiveTime = 0; // 下次主动消息触发时间
+let hasReceivedMsg = false;
+let proactiveUserId = null;
+const conversationStates = new Map(); // conversationId → { lastUserMsg, lastActivity }
+
+// 语音回复模式，按会话开关。用 /voice 切换。
+const voiceMode = new Set();
 
 // ==================== HTTP 服务器 ====================
 let qrCodeUrl = null;      // 二维码 URL
@@ -46,24 +56,34 @@ let loginMessage = "";
 let accountId = null;
 let wasConnected = false;  // 当前二维码是否会踢掉上一个用户
 
-// 图片清理：只保留最近5张
+// 媒体清理：图片和语音都只保留最近 5 个，否则小磁盘会慢慢被塞满
 const IMAGE_DIR = "/tmp/weixin-images";
-const MAX_IMAGES = 5;
-function cleanupOldImages(newImagePath) {
+const MEDIA_EXT = {
+  图片: /\.(jpg|jpeg|png|gif|webp|bmp)$/i,
+  语音: /\.(wav|mp3|m4a|aac|ogg|amr|silk|flac)$/i,
+};
+const MAX_MEDIA = 5;
+
+function cleanupOldMedia(kind, newPath) {
   try {
-    const dir = path.dirname(newImagePath);
+    const dir = path.dirname(newPath);
     if (!fs.existsSync(dir)) return;
+    const re = MEDIA_EXT[kind];
     const files = fs.readdirSync(dir)
-      .filter(f => /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(f))
+      .filter(f => re.test(f))
       .map(f => ({ name: f, path: path.join(dir, f), time: fs.statSync(path.join(dir, f)).mtimeMs }))
       .sort((a, b) => b.time - a.time); // 最新的在前
-    if (files.length > MAX_IMAGES) {
-      files.slice(MAX_IMAGES).forEach(f => {
+    if (files.length > MAX_MEDIA) {
+      files.slice(MAX_MEDIA).forEach(f => {
         fs.unlinkSync(f.path);
-        console.log("[图片] 清理旧图片: " + f.name);
+        console.log(`[${kind}] 清理旧文件: ` + f.name);
       });
     }
   } catch {}
+}
+
+function cleanupOldImages(newImagePath) {
+  cleanupOldMedia("图片", newImagePath);
 }
 
 // 微信用户自动注册到数据库
@@ -79,9 +99,23 @@ function getOrCreateWxUser(wxUid) {
 }
 
 // 微信内切换角色命令 /char 1 /char 2 /char 3
+// 可见角色列表（隐藏 lan-xiao-meng 角色，仅通过 /char 5201314 切换）
+const HIDDEN_PROFILE = "lan-xiao-meng";
+function getVisibleCharacters() {
+  return getAllCharacters().filter(c => !c.profile_path.includes(HIDDEN_PROFILE));
+}
+
 function handleCharCommand(uid, text) {
-  const chars = getAllCharacters();
   const parts = text.trim().split(/\s+/);
+  // 特特别别码切换到阮怡婷
+  if (parts.length >= 2 && parts[1] === "5201314") {
+    const ryt = getAllCharacters().find(c => c.id === 1);
+    if (ryt) {
+      setWxCharPreference(uid, { characterId: ryt.id, characterPath: ryt.profile_path });
+      return { text: "切换为 " + ryt.name + "！" };
+    }
+  }
+  const chars = getVisibleCharacters();
   if (parts.length < 2) {
     return { text: "用法：/char 数字\n" + chars.map(c => c.id + ". " + c.name).join("\n") };
   }
@@ -207,18 +241,54 @@ function disconnectBot() {
     clearInterval(proactiveTimer);
     proactiveTimer = null;
   }
-  if (botInstance) {
-    try {
-      if (typeof botInstance.stop === 'function') botInstance.stop();
-      if (typeof botInstance.disconnect === 'function') botInstance.disconnect();
-    } catch {}
-    botInstance = null;
+  if (botAbortController) {
+    botAbortController.abort();
+    botAbortController = null;
   }
+  botInstance = null;
   proactiveEnabled = false;
+  hasReceivedMsg = false;
+  conversationStates.clear();
   console.log('[Bot] 已断开上一用户');
 }
 
 // ==================== 微信登录 (直接调 iLink API) ====================
+// 登录失败后尝试用缓存凭证恢复连接
+async function tryAutoReconnect() {
+  try {
+    // 已经连着就不用重连了
+    if (botInstance) return true;
+
+    if (!sdk) sdk = await import("weixin-agent-sdk");
+    if (!sdk.isLoggedIn()) return false;
+
+    const accountsFile = path.join(process.env.HOME || "~", ".openclaw", "openclaw-weixin", "accounts.json");
+    if (!fs.existsSync(accountsFile)) return false;
+
+    const ids = JSON.parse(fs.readFileSync(accountsFile, "utf-8"));
+    if (!ids.length) return false;
+
+    accountId = ids[0];
+    const accountFile = path.join(
+      process.env.HOME || "~", ".openclaw", "openclaw-weixin", "accounts",
+      accountId.replace(/[@.]/g, "-") + ".json"
+    );
+    if (!fs.existsSync(accountFile)) return false;
+
+    const account = JSON.parse(fs.readFileSync(accountFile, "utf-8"));
+    // 先清理旧实例，防止重复 Bot
+    disconnectBot();
+    console.log("[登录] 尝试用缓存凭证恢复连接...");
+    await startBot(accountId, account.baseUrl, account.token, account.userId);
+    loginStatus = "confirmed";
+    console.log("[登录] 缓存凭证恢复成功");
+    return true;
+  } catch (e) {
+    console.log("[登录] 缓存凭证恢复失败:", e.message);
+    return false;
+  }
+}
+
 async function fetchJSON(url, opts = {}) {
   const resp = await fetch(url, {
     signal: AbortSignal.timeout(opts.timeout || 15000),
@@ -287,6 +357,7 @@ async function startLogin() {
               loginStatus = "idle";
               loginMessage = "";
               qrCodeUrl = null;
+              await tryAutoReconnect();
               return;
             }
             console.log("[登录] 二维码过期，刷新(" + qrRefreshCount + "/" + maxQrRefreshes + ")...");
@@ -337,11 +408,13 @@ async function startLogin() {
     loginStatus = "failed";
     loginMessage = "超时，请重新开始";
     wasConnected = false;
+    await tryAutoReconnect();
   } catch (err) {
     loginStatus = "failed";
     loginMessage = err.message;
     wasConnected = false;
     console.error("[登录]", err.message);
+    await tryAutoReconnect();
   }
 }
 
@@ -371,8 +444,73 @@ function saveCredentials(accountId, token, baseUrl, userId) {
   console.log("[凭证] 已保存");
 }
 
+// 发送后续拆分的消息（带随机延迟，模拟真人打字间隔）
+async function sendRemainingMessages(parts) {
+  for (const part of parts) {
+    const delay = 800 + Math.random() * 1700;
+    await new Promise(r => setTimeout(r, delay));
+    try {
+      if (botInstance) {
+        await botInstance.sendMessage(part);
+      }
+    } catch (e) {
+      console.error("[拆分消息] 发送失败:", e.message);
+    }
+  }
+}
+
+// 确保主动消息定时器在运行（/wake 或重连后可恢复）
+function ensureProactiveTimer() {
+  if (proactiveTimer) return;
+  proactiveTimer = setInterval(async () => {
+    const now = Date.now();
+    const hour = new Date().getHours();
+    if (!botInstance || !proactiveEnabled || !hasReceivedMsg) return;
+    if (hour < AUTO_START_HOUR || hour > AUTO_END_HOUR) return;
+    if (now < nextProactiveTime) return;
+
+    try {
+      // 找最近活跃的用户发主动消息（多用户支持）
+      let wxUid = proactiveUserId || "wx-user";
+      let userLastMsg = "";
+      let latestActivity = 0;
+      for (const [cid, state] of conversationStates) {
+        if (state.lastActivity > latestActivity) {
+          latestActivity = state.lastActivity;
+          wxUid = cid;
+          userLastMsg = state.lastUserMsg;
+        }
+      }
+      proactiveUserId = wxUid;
+      const dbUserId = getOrCreateWxUser(wxUid);
+      const pref = getWxCharPreference(wxUid);
+      const charId = pref ? pref.characterId : 25;
+      const facts = getFacts(dbUserId, charId);
+      const defChar = pref
+        ? { id: pref.characterId, profile_path: pref.characterPath }
+        : getAllCharacters().find(c => c.id === 25) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
+      const charPrompt = buildCharacterPrompt(defChar.profile_path);
+      const msg = await generateProactiveMessage(userLastMsg, facts, pref, charPrompt);
+      if (!msg) return;
+      const parts = msg.split('|||').map(p => p.trim()).filter(p => p);
+      await botInstance.sendMessage(parts[0]);
+      if (parts.length > 1) {
+        sendRemainingMessages(parts.slice(1));
+      }
+      console.log("[主动消息] 已发送: " + msg.slice(0, 40) + "...");
+      nextProactiveTime = Date.now() + randomInterval();
+    } catch (e) {
+      console.log("[主动消息] 发送失败: " + e.message);
+      nextProactiveTime = Date.now() + 2 * 60 * 1000;
+    }
+  }, 45_000);
+}
+
 // ==================== 启动 Bot ====================
 async function startBot(accountId, baseUrl, token, userId) {
+  // 防止多实例：先断开旧 Bot
+  if (botInstance) disconnectBot();
+
   if (!sdk) {
     sdk = await import("weixin-agent-sdk");
   }
@@ -385,7 +523,11 @@ async function startBot(accountId, baseUrl, token, userId) {
       let text = (req.text || "").trim();
 
       resetActivityTimer();
-      if (text) lastUserMsg = text;
+      // 记录每个对话的状态（多用户支持）
+      const conv = conversationStates.get(uid) || { lastUserMsg: "", lastActivity: 0 };
+      if (text) conv.lastUserMsg = text;
+      conv.lastActivity = Date.now();
+      conversationStates.set(uid, conv);
       hasReceivedMsg = true;
 
       // 图片识别：用千问视觉模型描述图片内容
@@ -405,6 +547,20 @@ async function startBot(accountId, baseUrl, token, userId) {
         cleanupOldImages(req.media.filePath);
       }
 
+      // 语音识别：微信语音 → 文字，当作用户输入走后续流程
+      // SDK 已把微信的 SILK 格式转码成 WAV 交过来（media.type === "audio"）
+      if (req.media && req.media.type === "audio" && req.media.filePath) {
+        console.log("[语音] 收到语音, path=" + req.media.filePath.slice(-30));
+        const heard = await transcribeAudio(req.media.filePath);
+        if (heard) {
+          text = heard; // 自己识别的结果比微信自带转写更可控
+        } else if (!text) {
+          return { text: "听到了，但没听清你说啥，再说一遍~" };
+        }
+        // ASR 失败但微信自带转写非空时，保留原 text 继续往下走
+        cleanupOldMedia("语音", req.media.filePath);
+      }
+
       if (!text) return { text: nickname + '？你发了啥我怎么没看到~' };
 
       if (text === "/echo") return { text: "收到啦~ 蓝小梦在线中！" };
@@ -419,25 +575,61 @@ async function startBot(accountId, baseUrl, token, userId) {
       if (text === "/wake") {
         proactiveEnabled = true;
         resetActivityTimer();
+        ensureProactiveTimer();
         return { text: "芜湖~ 睡醒了！半小时不理我我就来找你~" };
       }
       if (text.startsWith("/char")) {
         return handleCharCommand(uid, text);
       }
       if (text === "/chars") {
-        const all = getAllCharacters();
-        return { text: all.map(c => `${c.id}. ${c.name}`).join("\n") + "\n发送 /char 数字 切换角色" };
+        const visible = getVisibleCharacters();
+        return { text: visible.map(c => `${c.id}. ${c.name}`).join("\n") + "\n发送 /char 数字 切换角色" };
+      }
+      if (text === "/disconnect") {
+        conversationStates.delete(uid);
+        clearWxCharPreference(uid);
+        return { text: "已断开。再发消息我会重新理你。" };
+      }
+      if (text === "/voice") {
+        if (voiceMode.has(uid)) {
+          voiceMode.delete(uid);
+          return { text: "好，切回纯文字啦~" };
+        }
+        voiceMode.add(uid);
+        return { text: "好呀，接下来我把想说的话录成音频发给你🎧 点开就能听～ 再发一次 /voice 切回文字" };
       }
 
       try {
         const dbUserId = getOrCreateWxUser(uid);
         // 检查该微信用户是否有偏好的角色
         const pref = getWxCharPreference(uid);
-        const chars = getAllCharacters();
+        // 默认角色：顾昀迟(25)，用户可自行切换
         const defChar = pref
           ? { id: pref.characterId, profile_path: pref.characterPath }
-          : (chars[0] || { id: 1, profile_path: "config/characters/lan-xiao-meng.json" });
+          : getAllCharacters().find(c => c.id === 25) || getAllCharacters().find(c => c.id !== 1) || { id: 25, profile_path: "config/characters/gu-yun-chi.json" };
         const reply = await handleMessage(dbUserId, defChar.id, text, defChar.profile_path, imageDesc);
+
+        // 语音模式：整段合成一条音频，做成带波形的视频发出去，不按 ||| 拆句。
+        //
+        // 为什么不发语音条：微信的 iLink 机器人平台不接受机器人发语音。
+        // 把包结构逐字段镜像真实入站语音、并采用参考实现的确切取值后，
+        // API 依然返回 200 + message_id 却不在微信里渲染 —— 断在平台侧。
+        // 但微信接受视频消息，所以做成视频：点开内联播放，有声音。
+        if (voiceMode.has(uid)) {
+          const spoken = reply.replace(/\|\|\|/g, "，");
+          const wav = await synthesize(spoken);
+          if (wav) {
+            const mp4 = await wavToVideo(wav);
+            if (mp4) {
+              return { text: spoken, media: { type: "video", url: mp4 } };
+            }
+            // ffmpeg 挂了就退回文件卡片，至少声音能到你手上
+            console.log("[语音] 视频合成失败，回退成文件发送");
+            return { text: spoken, media: { type: "file", url: wav } };
+          }
+          console.log("[语音] 合成失败，回退成文字发送");
+        }
+
         // 按 ||| 拆分为多条消息，模拟真人发微信
         const parts = reply.split('|||').map(p => p.trim()).filter(p => p);
         if (parts.length > 1) {
@@ -451,53 +643,16 @@ async function startBot(accountId, baseUrl, token, userId) {
     },
   };
 
-  // 发送后续拆分的消息（带随机延迟，模拟真人打字间隔）
-  async function sendRemainingMessages(parts) {
-    for (const part of parts) {
-      // 随机 800ms ~ 2.5s 的间隔
-      const delay = 800 + Math.random() * 1700;
-      await new Promise(r => setTimeout(r, delay));
-      try {
-        if (botInstance) {
-          await botInstance.sendMessage(part);
-        }
-      } catch (e) {
-        console.error("[拆分消息] 发送失败:", e.message);
-      }
-    }
-  }
-
-  botInstance = sdk.start(lanmengAgent, { accountId });
+  botAbortController = new AbortController();
+  botInstance = sdk.start(lanmengAgent, { accountId, abortSignal: botAbortController.signal });
 
   console.log('✅ Bot 已启动 (accountId=' + accountId + ')');
 
   proactiveEnabled = true;
-  let hasReceivedMsg = false;
-  nextProactiveTime = Date.now() + randomInterval(); // 启动时随机设定首次触发时间
-
-  proactiveTimer = setInterval(async () => {
-    const now = Date.now();
-    const hour = new Date().getHours();
-    if (!botInstance || !proactiveEnabled || !hasReceivedMsg) return;
-    if (hour < AUTO_START_HOUR || hour > AUTO_END_HOUR) return;
-    if (now < nextProactiveTime) return;
-
-    try {
-      const wxUid = userId || "wx-user";
-      const dbUserId = getOrCreateWxUser(wxUid);
-      const pref = getWxCharPreference(wxUid);
-      const chars = getAllCharacters();
-      const charId = pref ? pref.characterId : (chars[0] ? chars[0].id : 1);
-      const facts = getFacts(dbUserId, charId);
-      const msg = generateProactiveMessage(lastUserMsg, facts, pref);
-      await botInstance.sendMessage(msg);
-      console.log("[主动消息] 已发送: " + msg.slice(0, 40) + "...");
-      nextProactiveTime = Date.now() + randomInterval(); // 随机重置
-    } catch (e) {
-      console.log("[主动消息] 发送失败: " + e.message);
-      nextProactiveTime = Date.now() + 2 * 60 * 1000; // 失败2分钟后重试
-    }
-  }, 45_000);
+  hasReceivedMsg = false;
+  proactiveUserId = userId || null;
+  nextProactiveTime = Date.now() + randomInterval();
+  ensureProactiveTimer();
 }
 
 function resetActivityTimer() {
@@ -530,10 +685,11 @@ if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY.includes("your
 // 初始化数据库
 console.log("🗄️  初始化数据库...");
 seedCharacters([
-  { name: "蓝小梦", profile_path: "config/characters/lan-xiao-meng.json" },
-  { name: "知性姐姐", profile_path: "config/characters/zhi-xing-jie-jie.json" },
-  { name: "搞笑闺蜜", profile_path: "config/characters/gao-xiao-gui-mi.json" },
+  { name: "蓝色大肥鱼", profile_path: "config/characters/da-fei-yu.json" },
+  { name: "阮怡婷", profile_path: "config/characters/lan-xiao-meng.json" },
   { name: "顾昀迟", profile_path: "config/characters/gu-yun-chi.json" },
+  { name: "晏烬", profile_path: "config/characters/yan-jin.json" },
+  { name: "紫零", profile_path: "config/characters/zi-ling.json" },
 ]);
 // 迁移旧的 JSON 记忆数据
 try { migrateJSONtoDB(); console.log("📦 旧数据已迁移到数据库"); } catch {}
